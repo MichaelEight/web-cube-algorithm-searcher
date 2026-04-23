@@ -5,8 +5,10 @@ import {
   BLANK,
   FACE_COLOR,
   FACE_INDEX_OFFSET,
+  MOVE_REGISTRY,
   SOLVED,
   W,
+  apply,
   applySequence,
   type CubeState,
   type Move,
@@ -28,6 +30,12 @@ import * as statsStore from './storage/stats'
 import * as userAlgs from './storage/userAlgs'
 
 type Method = 'iddfs' | 'bidir' | 'parallel'
+
+const MOVE_KEY_MAP: Record<string, string> = {
+  r: 'R', l: 'L', u: 'U', d: 'D', f: 'F', b: 'B',
+  m: 'M', e: 'E', s: 'S',
+  x: 'x', y: 'y', z: 'z',
+}
 
 function useViewport(): { w: number; h: number } {
   const [v, setV] = useState(() => ({
@@ -79,6 +87,7 @@ export default function App() {
   const [showHistory, setShowHistory] = useState(false)
   const [showStats, setShowStats] = useState(false)
   const [loadTarget, setLoadTarget] = useState<'start' | 'target' | null>(null)
+  const [activeCube, setActiveCube] = useState<'start' | 'target'>('start')
   const [startMovesText, setStartMovesText] = useState('')
   const [startMovesStatus, setStartMovesStatus] = useState('')
   const [targetMovesText, setTargetMovesText] = useState('')
@@ -289,19 +298,42 @@ export default function App() {
     setTargetState(a)
   }
 
+  const startStateRef = useRef(startState)
+  const targetStateRef = useRef(targetState)
+  const activeCubeRef = useRef(activeCube)
+  startStateRef.current = startState
+  targetStateRef.current = targetState
+  activeCubeRef.current = activeCube
+
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (e.key === 'Escape' && searching) { cancelSearch(); return }
       const tgt = e.target as HTMLElement | null
       const tagName = tgt?.tagName
       if (tagName === 'INPUT' || tagName === 'TEXTAREA' || tgt?.isContentEditable) return
+
       const code = e.code
       if (code.startsWith('Digit')) {
         const n = parseInt(code.slice(5), 10)
         if (n >= 1 && n <= PALETTE.length) {
           setSelectedColor(PALETTE[n - 1])
           e.preventDefault()
+          return
         }
+      }
+
+      const base = MOVE_KEY_MAP[e.key.toLowerCase()]
+      if (!base) return
+      let name = base
+      if (e.altKey) name = base + '2'
+      else if (e.shiftKey) name = base + "'"
+      const mv = MOVE_REGISTRY[name]
+      if (!mv) return
+      e.preventDefault()
+      if (activeCubeRef.current === 'start') {
+        setStartState(apply(startStateRef.current, mv))
+      } else {
+        setTargetState(apply(targetStateRef.current, mv))
       }
     }
     window.addEventListener('keydown', handler)
@@ -314,7 +346,7 @@ export default function App() {
   return (
     <div className="app">
       <div className="cube-nets">
-        <Cube3D state={startState} scale={cube3dScale} />
+        <Cube3D state={startState} scale={cube3dScale} onActivate={() => setActiveCube('start')} active={activeCube === 'start'} />
         <div className="cube-col">
           <div className="cube-col-header">
             <div className="title">Start</div>
@@ -324,7 +356,14 @@ export default function App() {
               <button onClick={swap} title="Swap start/target">⇄</button>
             </div>
           </div>
-          <CubeNet state={startState} onChange={setStartState} selectedColor={selectedColor} stickerSize={stickerSize} />
+          <CubeNet
+            state={startState}
+            onChange={setStartState}
+            selectedColor={selectedColor}
+            stickerSize={stickerSize}
+            onActivate={() => setActiveCube('start')}
+            active={activeCube === 'start'}
+          />
           <div className="row" style={{ gap: 4 }}>
             <button onClick={() => scramble('start')}>Scramble…</button>
             <button onClick={() => saveStatePrompt('start')}>Save…</button>
@@ -350,7 +389,8 @@ export default function App() {
           <div className="palette-hint">
             L-click: paint<br />
             R-click: ?<br />
-            Keys 1–7
+            Keys 1–7<br />
+            <span className="active-cube-tag">active: {activeCube}</span>
           </div>
         </div>
 
@@ -363,7 +403,14 @@ export default function App() {
               <button onClick={() => setTargetState([...startState])} title="Copy from start">← Start</button>
             </div>
           </div>
-          <CubeNet state={targetState} onChange={setTargetState} selectedColor={selectedColor} stickerSize={stickerSize} />
+          <CubeNet
+            state={targetState}
+            onChange={setTargetState}
+            selectedColor={selectedColor}
+            stickerSize={stickerSize}
+            onActivate={() => setActiveCube('target')}
+            active={activeCube === 'target'}
+          />
           <div className="row" style={{ gap: 4 }}>
             <button onClick={() => scramble('target')}>Scramble…</button>
             <button onClick={() => saveStatePrompt('target')}>Save…</button>
@@ -382,7 +429,7 @@ export default function App() {
           </div>
           {targetMovesStatus && <div className="status">{targetMovesStatus}</div>}
         </div>
-        <Cube3D state={targetState} scale={cube3dScale} />
+        <Cube3D state={targetState} scale={cube3dScale} onActivate={() => setActiveCube('target')} active={activeCube === 'target'} />
       </div>
 
       <div className="bottom-grid">

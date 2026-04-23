@@ -153,12 +153,13 @@ select {
   user-select: none;
   touch-action: none;
   display: block;
-  outline: none;
-  border-radius: 2px;
-}
-.sticker-net:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid transparent;
   outline-offset: 2px;
+  border-radius: 2px;
+  transition: outline-color 0.1s;
+}
+.sticker-net.active {
+  outline-color: var(--accent);
 }
 
 .sticker {
@@ -173,7 +174,13 @@ select {
   display: block;
   align-self: center;
   margin-top: 28px;
+  outline: 2px solid transparent;
+  outline-offset: 2px;
+  border-radius: 4px;
+  transition: outline-color 0.1s;
 }
+.cube-3d.clickable { cursor: pointer; }
+.cube-3d.active { outline-color: var(--accent); }
 
 /* ---------- palette column (center) ---------- */
 
@@ -197,6 +204,17 @@ select {
   color: var(--fg-dim);
   text-align: center;
   line-height: 1.5;
+}
+.active-cube-tag {
+  display: inline-block;
+  margin-top: 4px;
+  padding: 1px 6px;
+  background: var(--sel);
+  color: #fff;
+  border-radius: 3px;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
 }
 
 .palette {

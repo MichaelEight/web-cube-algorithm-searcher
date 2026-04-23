@@ -17,6 +17,8 @@ const FACE_DEFS: Record<'U' | 'F' | 'R', FaceDef> = {
 interface Props {
   state: CubeState
   scale?: number
+  onActivate?: () => void
+  active?: boolean
 }
 
 interface Quad {
@@ -55,16 +57,17 @@ function buildQuads(state: CubeState, width: number, height: number, scale: numb
   return quads
 }
 
-export function Cube3D({ state, scale = 22 }: Props) {
+export function Cube3D({ state, scale = 22, onActivate, active = false }: Props) {
   const width = Math.round(scale * 6 * COS30) + 12
   const height = scale * 6 + 12
   const quads = buildQuads(state, width, height, scale)
   return (
     <svg
-      className="cube-3d"
+      className={`cube-3d${active ? ' active' : ''}${onActivate ? ' clickable' : ''}`}
       width={width}
       height={height}
       viewBox={`0 0 ${width} ${height}`}
+      onPointerDown={onActivate}
     >
       {quads.map((q) => (
         <polygon key={q.key} points={q.points} fill={q.fill} stroke="#000" strokeWidth={1} />

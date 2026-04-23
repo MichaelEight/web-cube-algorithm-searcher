@@ -4,8 +4,6 @@ import {
   CENTER_INDICES,
   COLOR_HEX,
   FACE_INDEX_OFFSET,
-  MOVE_REGISTRY,
-  apply,
   type CubeState,
 } from '../cube/cube'
 
@@ -29,6 +27,8 @@ interface Props {
   stickerSize?: number
   stickerGap?: number
   faceGap?: number
+  onActivate?: () => void
+  active?: boolean
 }
 
 interface StickerMeta {
@@ -91,13 +91,16 @@ function indexAt(L: Layout, x: number, y: number): number | null {
   return null
 }
 
-const BASE_MAP: Record<string, string> = {
-  r: 'R', l: 'L', u: 'U', d: 'D', f: 'F', b: 'B',
-  m: 'M', e: 'E', s: 'S',
-  x: 'x', y: 'y', z: 'z',
-}
-
-export function CubeNet({ state, onChange, selectedColor, stickerSize = 20, stickerGap = 2, faceGap = 4 }: Props) {
+export function CubeNet({
+  state,
+  onChange,
+  selectedColor,
+  stickerSize = 20,
+  stickerGap = 2,
+  faceGap = 4,
+  onActivate,
+  active = false,
+}: Props) {
   const svgRef = useRef<SVGSVGElement>(null)
   const [dragging, setDragging] = useState<'left' | 'right' | null>(null)
   const stateRef = useRef(state)
@@ -123,7 +126,7 @@ export function CubeNet({ state, onChange, selectedColor, stickerSize = 20, stic
   }, [L])
 
   const onPointerDown = (e: React.PointerEvent<SVGSVGElement>) => {
-    svgRef.current?.focus()
+    onActivate?.()
     const idx = idxFromEvent(e)
     if (idx === null) return
     try { svgRef.current?.setPointerCapture(e.pointerId) } catch {
@@ -155,20 +158,6 @@ export function CubeNet({ state, onChange, selectedColor, stickerSize = 20, stic
 
   const onContextMenu = (e: React.MouseEvent) => { e.preventDefault() }
 
-  const onKeyDown = useCallback((e: React.KeyboardEvent<SVGSVGElement>) => {
-    const key = e.key
-    const low = key.toLowerCase()
-    if (!(low in BASE_MAP)) return
-    const base = BASE_MAP[low]
-    let name = base
-    if (e.altKey) name = base + '2'
-    else if (e.shiftKey) name = base + "'"
-    const mv = MOVE_REGISTRY[name]
-    if (!mv) return
-    e.preventDefault()
-    onChange(apply(stateRef.current, mv))
-  }, [onChange])
-
   useEffect(() => {
     const handler = (e: Event) => e.preventDefault()
     const el = svgRef.current
@@ -179,17 +168,15 @@ export function CubeNet({ state, onChange, selectedColor, stickerSize = 20, stic
   return (
     <svg
       ref={svgRef}
-      className="sticker-net"
+      className={`sticker-net${active ? ' active' : ''}`}
       width={L.width}
       height={L.height}
       viewBox={`0 0 ${L.width} ${L.height}`}
-      tabIndex={0}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
       onPointerCancel={onPointerUp}
       onContextMenu={onContextMenu}
-      onKeyDown={onKeyDown}
     >
       {L.layout.map(({ idx, x, y }) => (
         <rect
