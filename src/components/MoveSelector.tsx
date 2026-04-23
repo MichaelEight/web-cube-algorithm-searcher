@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { ALL_MOVES, type MoveCategory } from "../cube/cube";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { CubeSpec, Move, MoveCategory } from "../cube/cube";
 
 export type MoveToggles = Record<string, boolean>;
 
 interface Props {
+  cube: CubeSpec;
   toggles: MoveToggles;
   setToggles: (t: MoveToggles) => void;
 }
@@ -15,31 +16,22 @@ interface CategorySpec {
   twoColumns: boolean;
 }
 
-const CATEGORIES: CategorySpec[] = [
-  {
-    key: "htm",
-    label: "HTM",
-    faces: ["U", "D", "L", "R", "F", "B"],
-    twoColumns: true,
-  },
-  {
-    key: "wide",
-    label: "Wide",
-    faces: ["Uw", "Dw", "Lw", "Rw", "Fw", "Bw"],
-    twoColumns: true,
-  },
-  { key: "slice", label: "Slice", faces: ["M", "E", "S"], twoColumns: false },
-  {
-    key: "rotation",
-    label: "Rotations",
-    faces: ["x", "y", "z"],
-    twoColumns: false,
-  },
-];
+function buildCategories(cube: CubeSpec): CategorySpec[] {
+  const out: CategorySpec[] = []
+  out.push({ key: 'htm', label: 'HTM', faces: [...cube.HTM_FACES], twoColumns: true })
+  if (cube.WIDE_FACES.length) {
+    out.push({ key: 'wide', label: 'Wide', faces: [...cube.WIDE_FACES], twoColumns: true })
+  }
+  if (cube.SLICE_FACES.length) {
+    out.push({ key: 'slice', label: 'Slice', faces: [...cube.SLICE_FACES], twoColumns: false })
+  }
+  out.push({ key: 'rotation', label: 'Rotations', faces: [...cube.ROT_FACES], twoColumns: false })
+  return out
+}
 
-export function buildDefaultToggles(): MoveToggles {
+export function buildDefaultToggles(cube: CubeSpec): MoveToggles {
   const t: MoveToggles = {};
-  for (const m of ALL_MOVES) t[m.name] = m.category === "htm";
+  for (const m of cube.ALL_MOVES) t[m.name] = m.category === "htm";
   return t;
 }
 
@@ -112,7 +104,7 @@ function CategoryCard({
   );
 }
 
-export function MoveSelector({ toggles, setToggles }: Props) {
+export function MoveSelector({ cube, toggles, setToggles }: Props) {
   const togglesRef = useRef(toggles);
   togglesRef.current = toggles;
   const setTogglesRef = useRef(setToggles);
@@ -123,6 +115,8 @@ export function MoveSelector({ toggles, setToggles }: Props) {
   const rafRef = useRef<number | null>(null);
   const lastPointerRef = useRef<{ x: number; y: number } | null>(null);
   const [, force] = useState(0);
+
+  const categories = useMemo(() => buildCategories(cube), [cube])
 
   const applyPill = useCallback((name: string, val: boolean) => {
     const cur = togglesRef.current;
@@ -183,29 +177,35 @@ export function MoveSelector({ toggles, setToggles }: Props) {
     [applyPill],
   );
 
+  const availableFaces = useMemo(() => new Set(cube.ALL_MOVES.map((m: Move) => m.name.replace(/['2]$/, ''))), [cube])
+
   const preset = (faceLetters: string[]) => {
+    const allowed = faceLetters.filter((f) => availableFaces.has(f))
     const next = { ...toggles };
-    for (const m of ALL_MOVES) {
+    for (const m of cube.ALL_MOVES) {
       const base = m.name.replace(/['2]$/, "");
-      next[m.name] = faceLetters.includes(base);
+      next[m.name] = allowed.includes(base);
     }
     setToggles(next);
   };
 
   const presetDoubles = () => {
-    const doubles = new Set([
-      "U2",
-      "D2",
-      "R2",
-      "L2",
-      "F2",
-      "B2",
-      "M2",
-      "E2",
-      "S2",
-    ]);
     const next: MoveToggles = {};
-    for (const m of ALL_MOVES) next[m.name] = doubles.has(m.name);
+    for (const m of cube.ALL_MOVES) {
+      next[m.name] = m.name.endsWith('2') && (m.category === 'htm' || m.category === 'slice')
+    }
+    setToggles(next);
+  };
+
+  const presetAll = () => {
+    const next: MoveToggles = {};
+    for (const m of cube.ALL_MOVES) next[m.name] = true;
+    setToggles(next);
+  };
+
+  const presetNone = () => {
+    const next: MoveToggles = {};
+    for (const m of cube.ALL_MOVES) next[m.name] = false;
     setToggles(next);
   };
 
@@ -215,11 +215,15 @@ export function MoveSelector({ toggles, setToggles }: Props) {
 
       <div className="presets-row">
         <span className="presets-label">Presets:</span>
+        <button onClick={presetNone}>NONE</button>
+        <button onClick={presetAll}>ALL</button>
         <button onClick={() => preset(["R", "U"])}>R U</button>
         <button onClick={() => preset(["R", "U", "F"])}>R U F</button>
         <button onClick={() => preset(["R", "U", "L"])}>R U L</button>
         <button onClick={() => preset(["R", "U", "L", "F"])}>R U L F</button>
-        <button onClick={() => preset(["M", "U"])}>M U</button>
+        {cube.SLICE_FACES.length > 0 && (
+          <button onClick={() => preset(["M", "U"])}>M U</button>
+        )}
         <button onClick={() => preset(["U", "D", "L", "R", "F", "B"])}>
           All HTM
         </button>
@@ -227,7 +231,7 @@ export function MoveSelector({ toggles, setToggles }: Props) {
       </div>
 
       <div className="categories-grid">
-        {CATEGORIES.map((spec) => (
+        {categories.map((spec) => (
           <CategoryCard
             key={spec.key}
             spec={spec}

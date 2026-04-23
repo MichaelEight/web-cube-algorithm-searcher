@@ -1,9 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   ANY,
-  CENTER_INDICES,
   COLOR_HEX,
-  FACE_INDEX_OFFSET,
+  type CubeSpec,
   type CubeState,
 } from '../cube/cube'
 
@@ -16,11 +15,12 @@ const FACE_GRID_POS: Record<string, [number, number]> = {
   D: [2, 1],
 }
 
-function stickerIdx(face: string, row: number, col: number): number {
-  return FACE_INDEX_OFFSET[face] + 3 * row + col
+function stickerIdx(cube: CubeSpec, face: string, row: number, col: number): number {
+  return cube.FACE_INDEX_OFFSET[face] + cube.N * row + col
 }
 
 interface Props {
+  cube: CubeSpec
   state: CubeState
   onChange: (state: CubeState) => void
   selectedColor: number
@@ -46,15 +46,16 @@ interface Layout {
   faceGap: number
 }
 
-function buildLayout(stickerSize: number, stickerGap: number, faceGap: number): Layout {
-  const facePx = 3 * stickerSize + 2 * stickerGap
+function buildLayout(cube: CubeSpec, stickerSize: number, stickerGap: number, faceGap: number): Layout {
+  const N = cube.N
+  const facePx = N * stickerSize + (N - 1) * stickerGap
   const out: StickerMeta[] = []
   for (const [face, [gr, gc]] of Object.entries(FACE_GRID_POS)) {
     const x0 = gc * (facePx + faceGap)
     const y0 = gr * (facePx + faceGap)
-    for (let r = 0; r < 3; r++) {
-      for (let c = 0; c < 3; c++) {
-        const idx = stickerIdx(face, r, c)
+    for (let r = 0; r < N; r++) {
+      for (let c = 0; c < N; c++) {
+        const idx = stickerIdx(cube, face, r, c)
         const sx = x0 + c * (stickerSize + stickerGap)
         const sy = y0 + r * (stickerSize + stickerGap)
         out.push({ idx, x: sx, y: sy })
@@ -72,7 +73,8 @@ function buildLayout(stickerSize: number, stickerGap: number, faceGap: number): 
   }
 }
 
-function indexAt(L: Layout, x: number, y: number): number | null {
+function indexAt(cube: CubeSpec, L: Layout, x: number, y: number): number | null {
+  const N = cube.N
   for (const [face, [gr, gc]] of Object.entries(FACE_GRID_POS)) {
     const fx0 = gc * (L.facePx + L.faceGap)
     const fy0 = gr * (L.facePx + L.faceGap)
@@ -84,13 +86,14 @@ function indexAt(L: Layout, x: number, y: number): number | null {
     if (ly % (L.stickerSize + L.stickerGap) >= L.stickerSize) return null
     const col = Math.floor(lx / (L.stickerSize + L.stickerGap))
     const row = Math.floor(ly / (L.stickerSize + L.stickerGap))
-    if (col > 2 || row > 2) return null
-    return stickerIdx(face, row, col)
+    if (col >= N || row >= N) return null
+    return stickerIdx(cube, face, row, col)
   }
   return null
 }
 
 export function CubeNet({
+  cube,
   state,
   onChange,
   selectedColor,
@@ -104,24 +107,25 @@ export function CubeNet({
   const stateRef = useRef(state)
   stateRef.current = state
 
-  const L = useMemo(() => buildLayout(stickerSize, stickerGap, faceGap), [stickerSize, stickerGap, faceGap])
+  const L = useMemo(() => buildLayout(cube, stickerSize, stickerGap, faceGap), [cube, stickerSize, stickerGap, faceGap])
+  const centerIndices = cube.CENTER_INDICES
 
   const paint = useCallback((idx: number, color: number) => {
-    if (CENTER_INDICES.has(idx)) return
+    if (centerIndices.has(idx)) return
     const cur = stateRef.current
     if (cur[idx] === color) return
     const next = cur.slice()
     next[idx] = color
     onChange(next)
-  }, [onChange])
+  }, [onChange, centerIndices])
 
   const idxFromEvent = useCallback((e: React.PointerEvent<SVGSVGElement>): number | null => {
     const rect = svgRef.current?.getBoundingClientRect()
     if (!rect) return null
     const x = (e.clientX - rect.left) * (L.width / rect.width)
     const y = (e.clientY - rect.top) * (L.height / rect.height)
-    return indexAt(L, x, y)
-  }, [L])
+    return indexAt(cube, L, x, y)
+  }, [L, cube])
 
   const onPointerDown = (e: React.PointerEvent<SVGSVGElement>) => {
     onActivate?.()
@@ -179,7 +183,7 @@ export function CubeNet({
       {L.layout.map(({ idx, x, y }) => (
         <rect
           key={idx}
-          className={`sticker${CENTER_INDICES.has(idx) ? ' center' : ''}`}
+          className={`sticker${centerIndices.has(idx) ? ' center' : ''}`}
           x={x}
           y={y}
           width={L.stickerSize}

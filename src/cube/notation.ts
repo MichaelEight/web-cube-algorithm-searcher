@@ -1,5 +1,5 @@
 // Parse and format cube move sequences.
-import { MOVE_REGISTRY, type Move } from './cube'
+import type { CubeSpec, Move } from './cube'
 
 const WIDE_ALIAS: Record<string, string> = {
   u: 'Uw', d: 'Dw', l: 'Lw', r: 'Rw', f: 'Fw', b: 'Bw',
@@ -49,12 +49,14 @@ export function formatSequenceGrouped(moves: readonly Move[]): string {
   return out.join(' ')
 }
 
-export function parseSequence(text: string): Move[] {
+export function parseSequence(cube: CubeSpec, text: string): Move[] {
   const tokens = text.replace(/,/g, ' ').split(/\s+/).filter(Boolean)
   const out: Move[] = []
   for (const tok of tokens) {
-    const c = canonical(tok)
-    const m = MOVE_REGISTRY[c]
+    // Prefer exact registry match so per-size moves like 4x4 inner slice "r" win over the generic "r → Rw" alias.
+    const direct = cube.MOVE_REGISTRY[tok]
+    if (direct) { out.push(direct); continue }
+    const m = cube.MOVE_REGISTRY[canonical(tok)]
     if (!m) throw new Error(`unknown move: ${JSON.stringify(tok)}`)
     out.push(m)
   }

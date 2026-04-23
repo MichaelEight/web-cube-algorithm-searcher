@@ -4,13 +4,14 @@ import * as states from '../storage/states'
 import type { CubeState } from '../cube/cube'
 
 interface Props {
+  cubeSize: number
   open: boolean
   onClose: () => void
   onLoad: (state: CubeState) => void
 }
 
-export function LoadStateDialog({ open, onClose, onLoad }: Props) {
-  const [data, setData] = useState(() => states.loadAll())
+export function LoadStateDialog({ cubeSize, open, onClose, onLoad }: Props) {
+  const [data, setData] = useState(() => states.loadAll(cubeSize))
   const names = Object.keys(data).sort()
   const [sel, setSel] = useState(0)
 
@@ -33,8 +34,8 @@ export function LoadStateDialog({ open, onClose, onLoad }: Props) {
     const name = names[sel]
     if (!name) return
     if (!confirm(`Delete state ${JSON.stringify(name)}?`)) return
-    states.deleteState(name)
-    const next = states.loadAll()
+    states.deleteState(cubeSize, name)
+    const next = states.loadAll(cubeSize)
     setData(next)
     setSel(Math.min(sel, Math.max(0, Object.keys(next).length - 1)))
   }

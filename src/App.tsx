@@ -1,15 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
-  ALL_MOVES,
   ANY,
-  BLANK,
-  FACE_COLOR,
-  FACE_INDEX_OFFSET,
-  MOVE_REGISTRY,
-  SOLVED,
   W,
-  apply,
-  applySequence,
+  createCube,
+  type CubeSpec,
   type CubeState,
   type Move,
 } from './cube/cube'
@@ -31,11 +25,35 @@ import * as statsStore from './storage/stats'
 import * as userAlgs from './storage/userAlgs'
 
 type Method = 'iddfs' | 'bidir' | 'parallel'
+type CubeSize = 2 | 3 | 4
 
-const MOVE_KEY_MAP: Record<string, string> = {
+const CUBE_SIZES: readonly CubeSize[] = [2, 3, 4]
+const DEFAULT_SIZE: CubeSize = 3
+const SIZE_STORAGE_KEY = 'cube-alg-search:cube-size'
+
+const BASE_MOVE_KEY_MAP: Record<string, string> = {
   r: 'R', l: 'L', u: 'U', d: 'D', f: 'F', b: 'B',
   m: 'M', e: 'E', s: 'S',
   x: 'x', y: 'y', z: 'z',
+}
+
+function buildMoveKeyMap(cube: CubeSpec): Record<string, string> {
+  const out: Record<string, string> = {}
+  for (const [k, name] of Object.entries(BASE_MOVE_KEY_MAP)) {
+    if (cube.MOVE_REGISTRY[name]) out[k] = name
+  }
+  return out
+}
+
+function loadSize(): CubeSize {
+  try {
+    const raw = localStorage.getItem(SIZE_STORAGE_KEY)
+    const n = raw ? parseInt(raw, 10) : NaN
+    if (CUBE_SIZES.includes(n as CubeSize)) return n as CubeSize
+  } catch {
+    // ignore
+  }
+  return DEFAULT_SIZE
 }
 
 function useViewport(): { w: number; h: number } {
@@ -51,37 +69,34 @@ function useViewport(): { w: number; h: number } {
   return v
 }
 
-function clearState(): CubeState {
-  const s = [...BLANK]
-  for (const [face, off] of Object.entries(FACE_INDEX_OFFSET)) {
-    s[off + 4] = FACE_COLOR[face]
-  }
-  return s
-}
-
 export default function App() {
   const viewport = useViewport()
   const isMobile = viewport.w < 780
+
+  const [cubeSize, setCubeSize] = useState<CubeSize>(() => loadSize())
+  const cube = useMemo(() => createCube(cubeSize), [cubeSize])
+
   const cubeDims = useMemo(() => {
+    const N = cube.N
     if (isMobile) {
-      // net width = 4 * (3s + 2g) + 3 * fg = 12s + 8g + 3fg = 12s + 16 + 12 = 12s + 28
-      // solve for stickerSize so net fits viewport width with ~20px padding each side
       const availW = viewport.w - 24
-      const maxByWidth = Math.floor((availW - 28) / 12)
-      const maxByHeight = Math.floor((viewport.h * 0.35 - 8) / 9)
-      const sticker = Math.max(16, Math.min(32, Math.min(maxByWidth, maxByHeight)))
-      return { sticker, scale3d: Math.max(14, Math.min(22, Math.floor(sticker * 0.85))) }
+      // net width = 4 * (Ns + (N-1)g) + 3 * fg; g=2, fg=4
+      // ~= 4Ns + 4(N-1)*2 + 12 = 4Ns + 8(N-1) + 12
+      const maxByWidth = Math.floor((availW - 8 * (N - 1) - 12) / (4 * N))
+      const maxByHeight = Math.floor((viewport.h * 0.35 - 8) / (3 * N))
+      const sticker = Math.max(12, Math.min(32, Math.min(maxByWidth, maxByHeight)))
+      return { sticker, scale3d: Math.max(10, Math.min(24, Math.floor(sticker * 0.85))) }
     }
     const maxNetHeight = Math.max(140, Math.min(260, viewport.h * 0.36))
-    const sticker = Math.max(12, Math.min(24, Math.floor((maxNetHeight - 8) / 9)))
-    const scale3d = Math.max(14, Math.min(26, Math.floor(sticker * 1.15)))
+    const sticker = Math.max(8, Math.min(28, Math.floor((maxNetHeight - 8) / (3 * N))))
+    const scale3d = Math.max(10, Math.min(30, Math.floor(sticker * 1.15)))
     return { sticker, scale3d }
-  }, [viewport.w, viewport.h, isMobile])
+  }, [viewport.w, viewport.h, isMobile, cube])
 
-  const [startState, setStartState] = useState<CubeState>(() => [...SOLVED])
-  const [targetState, setTargetState] = useState<CubeState>(() => [...SOLVED])
+  const [startState, setStartState] = useState<CubeState>(() => [...cube.SOLVED])
+  const [targetState, setTargetState] = useState<CubeState>(() => [...cube.SOLVED])
   const [selectedColor, setSelectedColor] = useState<number>(W)
-  const [toggles, setToggles] = useState<MoveToggles>(() => buildDefaultToggles())
+  const [toggles, setToggles] = useState<MoveToggles>(() => buildDefaultToggles(cube))
   const [maxDepth, setMaxDepth] = useState(10)
   const [maxSolutions, setMaxSolutions] = useState(1)
   const [groupTerms, setGroupTerms] = useState(true)
@@ -108,6 +123,28 @@ export default function App() {
   const depthNodesStartRef = useRef(0)
   const progressRef = useRef({ depth: 0, nodes: 0, found: 0, dirty: false })
 
+  // Reset per-size state when cube changes.
+  useEffect(() => {
+    setStartState([...cube.SOLVED])
+    setTargetState([...cube.SOLVED])
+    setToggles(buildDefaultToggles(cube))
+    setLastSolutions([])
+    setSelectedResult(null)
+    setStatus('Ready.')
+    setProgressPct(0)
+    setDepthText('')
+    setStartMovesText('')
+    setStartMovesStatus('')
+    setTargetMovesText('')
+    setTargetMovesStatus('')
+  }, [cube])
+
+  useEffect(() => {
+    try { localStorage.setItem(SIZE_STORAGE_KEY, String(cubeSize)) } catch {
+      // ignore
+    }
+  }, [cubeSize])
+
   useEffect(() => {
     if (!searching) return
     const tick = setInterval(() => {
@@ -128,18 +165,18 @@ export default function App() {
     return () => clearInterval(tick)
   }, [searching, maxDepth])
 
-  const lines: ResultLine[] = buildResultLines(lastSolutions, groupTerms, showAlts)
+  const lines: ResultLine[] = buildResultLines(cube, lastSolutions, groupTerms, showAlts)
 
-  const collectAllowed = useCallback((): Move[] => ALL_MOVES.filter((m) => toggles[m.name]), [toggles])
+  const collectAllowed = useCallback((): Move[] => cube.ALL_MOVES.filter((m) => toggles[m.name]), [cube, toggles])
 
   const applyMoves = (target: 'start' | 'target') => {
     const isStart = target === 'start'
     const text = (isStart ? startMovesText : targetMovesText).trim()
     if (!text) return
     try {
-      const seq = parseSequence(text)
+      const seq = parseSequence(cube, text)
       const current = isStart ? startState : targetState
-      const next = applySequence(current, seq)
+      const next = cube.applySequence(current, seq)
       if (isStart) { setStartState(next); setStartMovesStatus(`Applied ${seq.length} move(s).`); setStartMovesText('') }
       else { setTargetState(next); setTargetMovesStatus(`Applied ${seq.length} move(s).`); setTargetMovesText('') }
     } catch (e) {
@@ -152,8 +189,8 @@ export default function App() {
     const text = prompt('Move sequence (applied to solved):')
     if (!text) return
     try {
-      const seq = parseSequence(text)
-      const next = applySequence(SOLVED, seq)
+      const seq = parseSequence(cube, text)
+      const next = cube.applySequence(cube.SOLVED, seq)
       if (which === 'start') setStartState(next); else setTargetState(next)
     } catch (e) {
       alert(e instanceof Error ? e.message : String(e))
@@ -165,9 +202,9 @@ export default function App() {
     if (!name) return
     const trimmed = name.trim()
     if (!trimmed) return
-    const existing = statesStore.loadAll()
+    const existing = statesStore.loadAll(cube.N)
     if (trimmed in existing && !confirm(`State ${JSON.stringify(trimmed)} exists. Overwrite?`)) return
-    statesStore.saveState(trimmed, which === 'start' ? startState : targetState)
+    statesStore.saveState(cube.N, trimmed, which === 'start' ? startState : targetState)
   }
 
   const renderFinal = useCallback((sols: Move[][], elapsed: number, nodes: number, cancelled: boolean) => {
@@ -179,14 +216,14 @@ export default function App() {
       setProgressPct(0)
       return
     }
-    const simplified = simplifyAndDedupe(sols)
+    const simplified = simplifyAndDedupe(cube, sols)
     const raw = sols.length
     const dropped = raw - simplified.length
     setLastSolutions(simplified)
     const dedupeNote = dropped > 0 ? `, ${dropped} dedup.` : ''
     setStatus(`Found ${simplified.length} algorithm(s)${dedupeNote}. Shortest: ${simplified[0].length} moves. ${statsLine}`)
     setProgressPct(100)
-  }, [maxDepth])
+  }, [maxDepth, cube])
 
   const startSearch = async () => {
     if (searching) return
@@ -224,7 +261,7 @@ export default function App() {
 
     const onSol = (path: readonly Move[]) => {
       liveSols.push([...path])
-      setLastSolutions(simplifyAndDedupe(liveSols))
+      setLastSolutions(simplifyAndDedupe(cube, liveSols))
     }
 
     try {
@@ -234,7 +271,7 @@ export default function App() {
           maxDepth, maxSolutions, cancel, progressCb: onProgress, onSolution: onSol,
         })
       } else if (chosen === 'parallel') {
-        result = await findAlgorithmsParallel(startState, targetState, allowed, {
+        result = await findAlgorithmsParallel(cube, startState, targetState, allowed, {
           maxDepth, maxSolutions, cancel, progressCb: onProgress, onSolution: onSol,
         })
       } else {
@@ -249,7 +286,7 @@ export default function App() {
 
       const allowedNames = allowed.map((m) => m.name)
       const shortest = sols.length ? Math.min(...sols.map((s) => s.length)) : null
-      statsStore.logEntry({
+      statsStore.logEntry(cube.N, {
         method: chosen,
         allowedMoves: allowedNames,
         maxDepth,
@@ -261,6 +298,7 @@ export default function App() {
       })
       if (sols.length && !(sols.length === 1 && sols[0].length === 0)) {
         solutionsStore.appendRecord(
+          cube.N,
           startState,
           targetState,
           sols.map((s) => s.map((m) => m.name)),
@@ -290,6 +328,21 @@ export default function App() {
     if (seq) copyToClipboard(seq)
   }
 
+  const openInVisualizer = (seq: Move[]) => {
+    if (!seq.length) return
+    const scramble = seq.map((m) => m.name.replace(/'/g, '-')).join('_')
+    const url = `https://www.cubedb.net/?puzzle=${cube.N}x${cube.N}&scramble=${encodeURIComponent(scramble)}`
+    window.open(url, '_blank', 'noopener,noreferrer')
+  }
+
+  const openSelected = () => {
+    if (selectedResult === null) return
+    const seq = lines[selectedResult]?.seq
+    if (seq) openInVisualizer(seq)
+  }
+
+  const selectedSeqLen = selectedResult === null ? 0 : (lines[selectedResult]?.seq.length ?? 0)
+
   const saveSelectedAlg = () => {
     if (selectedResult === null) { alert('Select a result first.'); return }
     const seq = lines[selectedResult]?.seq
@@ -298,9 +351,9 @@ export default function App() {
     if (!name) return
     const trimmed = name.trim()
     if (!trimmed) return
-    const existing = userAlgs.loadAll()
+    const existing = userAlgs.loadAll(cube.N)
     if (trimmed in existing && !confirm(`Algorithm ${JSON.stringify(trimmed)} exists. Overwrite?`)) return
-    userAlgs.saveAlg(trimmed, seq.map((m) => m.name))
+    userAlgs.saveAlg(cube.N, trimmed, seq.map((m) => m.name))
     setLastSolutions((prev) => [...prev])
   }
 
@@ -313,9 +366,13 @@ export default function App() {
   const startStateRef = useRef(startState)
   const targetStateRef = useRef(targetState)
   const activeCubeRef = useRef(activeCube)
+  const cubeRef = useRef(cube)
   startStateRef.current = startState
   targetStateRef.current = targetState
   activeCubeRef.current = activeCube
+  cubeRef.current = cube
+
+  const moveKeyMap = useMemo(() => buildMoveKeyMap(cube), [cube])
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -334,23 +391,23 @@ export default function App() {
         }
       }
 
-      const base = MOVE_KEY_MAP[e.key.toLowerCase()]
+      const base = moveKeyMap[e.key.toLowerCase()]
       if (!base) return
       let name = base
       if (e.altKey) name = base + '2'
       else if (e.shiftKey) name = base + "'"
-      const mv = MOVE_REGISTRY[name]
+      const mv = cubeRef.current.MOVE_REGISTRY[name]
       if (!mv) return
       e.preventDefault()
       if (activeCubeRef.current === 'start') {
-        setStartState(apply(startStateRef.current, mv))
+        setStartState(cubeRef.current.apply(startStateRef.current, mv))
       } else {
-        setTargetState(apply(targetStateRef.current, mv))
+        setTargetState(cubeRef.current.apply(targetStateRef.current, mv))
       }
     }
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
-  }, [searching, cancelSearch])
+  }, [searching, cancelSearch, moveKeyMap])
 
   const stickerSize = cubeDims.sticker
   const cube3dScale = cubeDims.scale3d
@@ -362,6 +419,23 @@ export default function App() {
   const currentMovesText = activeCube === 'start' ? startMovesText : targetMovesText
   const setCurrentMovesText = activeCube === 'start' ? setStartMovesText : setTargetMovesText
   const currentMovesStatus = activeCube === 'start' ? startMovesStatus : targetMovesStatus
+
+  const sizeSelector = (
+    <span className="size-selector" style={{ display: 'inline-flex', gap: 4, alignItems: 'center' }}>
+      <span className="hint">Cube:</span>
+      {CUBE_SIZES.map((n) => (
+        <button
+          key={n}
+          className={`size-btn${cubeSize === n ? ' accent' : ''}`}
+          onClick={() => setCubeSize(n)}
+          disabled={cubeSize === n}
+          title={`${n}x${n}x${n}`}
+        >
+          {n}x{n}
+        </button>
+      ))}
+    </span>
+  )
 
   const searchPanelBody = (
     <>
@@ -428,6 +502,7 @@ parallel — multi-worker DFS. Deep HTM exhaustive.`}
         <span className="hint">Tap to select · double-tap to copy</span>
         <div className="row" style={{ gap: 3 }}>
           <button onClick={copySelected} disabled={selectedResult === null}>Copy</button>
+          <button onClick={openSelected} disabled={selectedSeqLen === 0} title="Open in cubedb.net">Open…</button>
           <button onClick={saveSelectedAlg} disabled={selectedResult === null}>Save…</button>
         </div>
       </div>
@@ -443,6 +518,8 @@ parallel — multi-worker DFS. Deep HTM exhaustive.`}
   const modals = (
     <>
       <HistoryDialog
+        cube={cube}
+        sizes={CUBE_SIZES}
         open={showHistory}
         onClose={() => setShowHistory(false)}
         grouped={groupTerms}
@@ -450,8 +527,9 @@ parallel — multi-worker DFS. Deep HTM exhaustive.`}
         onLoadTarget={(s) => { setTargetState(s); setShowHistory(false) }}
         onLoadBoth={(s, t) => { setStartState(s); setTargetState(t); setShowHistory(false) }}
       />
-      <StatsDialog open={showStats} onClose={() => setShowStats(false)} />
+      <StatsDialog sizes={CUBE_SIZES} open={showStats} onClose={() => setShowStats(false)} />
       <LoadStateDialog
+        cubeSize={cube.N}
         open={loadTarget !== null}
         onClose={() => setLoadTarget(null)}
         onLoad={(s) => {
@@ -466,6 +544,9 @@ parallel — multi-worker DFS. Deep HTM exhaustive.`}
     const applyCurrent = () => applyMoves(activeCube)
     return (
       <div className="app app-mobile">
+        <div className="mobile-top-bar" style={{ display: 'flex', justifyContent: 'center', padding: '6px 0' }}>
+          {sizeSelector}
+        </div>
         <div className="mobile-tabs">
           <button
             className={`tab${activeCube === 'start' ? ' active' : ''}`}
@@ -478,11 +559,12 @@ parallel — multi-worker DFS. Deep HTM exhaustive.`}
         </div>
 
         <div className="mobile-3d">
-          <Cube3D state={currentState} scale={cube3dScale} />
+          <Cube3D cube={cube} state={currentState} scale={cube3dScale} />
         </div>
 
         <div className="mobile-net">
           <CubeNet
+            cube={cube}
             state={currentState}
             onChange={setCurrentState}
             selectedColor={selectedColor}
@@ -492,8 +574,8 @@ parallel — multi-worker DFS. Deep HTM exhaustive.`}
         </div>
 
         <div className="mobile-actions">
-          <button onClick={() => setCurrentState([...SOLVED])}>Solved</button>
-          <button onClick={() => setCurrentState(clearState())}>Clear</button>
+          <button onClick={() => setCurrentState([...cube.SOLVED])}>Solved</button>
+          <button onClick={() => setCurrentState(cube.clearState())}>Clear</button>
           {activeCube === 'start'
             ? <button onClick={swap} title="Swap">⇄ Swap</button>
             : <button onClick={() => setTargetState([...startState])}>← Start</button>}
@@ -522,7 +604,7 @@ parallel — multi-worker DFS. Deep HTM exhaustive.`}
         <details className="mobile-section">
           <summary>Allowed moves</summary>
           <div className="mobile-section-body">
-            <MoveSelector toggles={toggles} setToggles={setToggles} />
+            <MoveSelector cube={cube} toggles={toggles} setToggles={setToggles} />
           </div>
         </details>
 
@@ -543,20 +625,24 @@ parallel — multi-worker DFS. Deep HTM exhaustive.`}
 
   return (
     <div className="app">
+      <div className="top-bar" style={{ display: 'flex', justifyContent: 'center', padding: '6px 0' }}>
+        {sizeSelector}
+      </div>
       <div className="cube-nets">
         <div className={`cube-frame three-d${activeCube === 'start' ? ' active' : ''}`}>
-          <Cube3D state={startState} scale={cube3dScale} onActivate={() => setActiveCube('start')} />
+          <Cube3D cube={cube} state={startState} scale={cube3dScale} onActivate={() => setActiveCube('start')} />
         </div>
         <div className="cube-col">
           <div className="cube-col-header">
             <div className="title">Start</div>
             <div className="row" style={{ gap: 4 }}>
-              <button onClick={() => setStartState([...SOLVED])}>Solved</button>
-              <button onClick={() => setStartState(clearState())}>Clear</button>
+              <button onClick={() => setStartState([...cube.SOLVED])}>Solved</button>
+              <button onClick={() => setStartState(cube.clearState())}>Clear</button>
               <button onClick={swap} title="Swap start/target">⇄</button>
             </div>
           </div>
           <CubeNet
+            cube={cube}
             state={startState}
             onChange={setStartState}
             selectedColor={selectedColor}
@@ -597,12 +683,13 @@ parallel — multi-worker DFS. Deep HTM exhaustive.`}
           <div className="cube-col-header">
             <div className="title">Target <span className="hint">(gray = don't care)</span></div>
             <div className="row" style={{ gap: 4 }}>
-              <button onClick={() => setTargetState([...SOLVED])}>Solved</button>
-              <button onClick={() => setTargetState(clearState())}>Clear</button>
+              <button onClick={() => setTargetState([...cube.SOLVED])}>Solved</button>
+              <button onClick={() => setTargetState(cube.clearState())}>Clear</button>
               <button onClick={() => setTargetState([...startState])} title="Copy from start">← Start</button>
             </div>
           </div>
           <CubeNet
+            cube={cube}
             state={targetState}
             onChange={setTargetState}
             selectedColor={selectedColor}
@@ -628,12 +715,12 @@ parallel — multi-worker DFS. Deep HTM exhaustive.`}
           {targetMovesStatus && <div className="status">{targetMovesStatus}</div>}
         </div>
         <div className={`cube-frame three-d${activeCube === 'target' ? ' active' : ''}`}>
-          <Cube3D state={targetState} scale={cube3dScale} onActivate={() => setActiveCube('target')} />
+          <Cube3D cube={cube} state={targetState} scale={cube3dScale} onActivate={() => setActiveCube('target')} />
         </div>
       </div>
 
       <div className="bottom-grid">
-        <MoveSelector toggles={toggles} setToggles={setToggles} />
+        <MoveSelector cube={cube} toggles={toggles} setToggles={setToggles} />
 
         <div className="panel">
           <div className="panel-title">Search</div>
@@ -645,6 +732,7 @@ parallel — multi-worker DFS. Deep HTM exhaustive.`}
             <div className="panel-title">Results (shortest first)</div>
             <div className="row" style={{ gap: 3 }}>
               <button onClick={copySelected} disabled={selectedResult === null}>Copy</button>
+              <button onClick={openSelected} disabled={selectedSeqLen === 0} title="Open in cubedb.net">Open…</button>
               <button onClick={saveSelectedAlg} disabled={selectedResult === null}>Save…</button>
             </div>
           </div>

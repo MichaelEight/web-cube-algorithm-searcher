@@ -1,13 +1,26 @@
 // Sequence transformations: inverse and RL-mirror.
-import { MOVE_REGISTRY, type Move } from './cube'
+import type { CubeSpec, Move } from './cube'
 
-const MIRROR_FACE: Record<string, string> = {
-  R: 'L', L: 'R',
-  Rw: 'Lw', Lw: 'Rw',
-  U: 'U', D: 'D', F: 'F', B: 'B',
-  Uw: 'Uw', Dw: 'Dw', Fw: 'Fw', Bw: 'Bw',
-  M: 'M', E: 'E', S: 'S',
-  x: 'x', y: 'y', z: 'z',
+// Mirror wide: strip optional numeric prefix, flip R/L base, restore prefix and 'w'.
+function mirrorBase(base: string): string | null {
+  // Plain outer faces / slice / rotation
+  const flatMap: Record<string, string> = {
+    R: 'L', L: 'R',
+    U: 'U', D: 'D', F: 'F', B: 'B',
+    M: 'M', E: 'E', S: 'S',
+    r: 'l', l: 'r',
+    u: 'u', d: 'd', f: 'f', b: 'b',
+    x: 'x', y: 'y', z: 'z',
+  }
+  if (base in flatMap) return flatMap[base]
+  // Wide with optional numeric prefix: "Rw", "Lw", "3Rw", "3Lw"
+  const wideMatch = /^(\d*)([RLUDFB])w$/.exec(base)
+  if (wideMatch) {
+    const [, prefix, face] = wideMatch
+    const flipped = face === 'R' ? 'L' : face === 'L' ? 'R' : face
+    return `${prefix}${flipped}w`
+  }
+  return null
 }
 
 function split(name: string): [string, string] {
@@ -15,7 +28,7 @@ function split(name: string): [string, string] {
   return [name, '']
 }
 
-export function invertSequence(moves: readonly Move[]): Move[] {
+export function invertSequence(cube: CubeSpec, moves: readonly Move[]): Move[] {
   const out: Move[] = []
   for (let i = moves.length - 1; i >= 0; i--) {
     const m = moves[i]
@@ -24,22 +37,22 @@ export function invertSequence(moves: readonly Move[]): Move[] {
     if (suffix === '2') invName = m.name
     else if (suffix === "'") invName = base
     else invName = base + "'"
-    out.push(MOVE_REGISTRY[invName])
+    out.push(cube.MOVE_REGISTRY[invName])
   }
   return out
 }
 
-export function mirrorSequence(moves: readonly Move[]): Move[] | null {
+export function mirrorSequence(cube: CubeSpec, moves: readonly Move[]): Move[] | null {
   const out: Move[] = []
   for (const m of moves) {
     const [base, suffix] = split(m.name)
-    const newBase = MIRROR_FACE[base]
-    if (newBase === undefined) return null
+    const newBase = mirrorBase(base)
+    if (newBase === null) return null
     let newName: string
     if (suffix === '2') newName = newBase + '2'
     else if (suffix === "'") newName = newBase
     else newName = newBase + "'"
-    const mm = MOVE_REGISTRY[newName]
+    const mm = cube.MOVE_REGISTRY[newName]
     if (!mm) return null
     out.push(mm)
   }

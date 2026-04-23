@@ -1,4 +1,4 @@
-import { type Move, MOVE_REGISTRY } from '../cube/cube'
+import { type CubeSpec, type Move } from '../cube/cube'
 import { formatSequence, formatSequenceGrouped } from '../cube/notation'
 import { invertSequence, mirrorSequence } from '../cube/transform'
 import * as algsKnown from '../cube/algsKnown'
@@ -11,6 +11,7 @@ export interface ResultLine {
 }
 
 export function buildResultLines(
+  cube: CubeSpec,
   solutions: readonly (readonly Move[])[],
   grouped: boolean,
   showAlts: boolean,
@@ -19,21 +20,21 @@ export function buildResultLines(
   const fmt = grouped ? formatSequenceGrouped : formatSequence
   solutions.forEach((seqRaw, i) => {
     const seq = [...seqRaw]
-    out.push(toLine(`${String(i + 1).padStart(2, ' ')}.`, seq, fmt, `${i}-main`))
+    out.push(toLine(cube, `${String(i + 1).padStart(2, ' ')}.`, seq, fmt, `${i}-main`))
     if (showAlts && seq.length) {
-      const inv = invertSequence(seq)
-      out.push(toLine('    inv:', inv, fmt, `${i}-inv`))
-      const mir = mirrorSequence(seq)
-      if (mir !== null) out.push(toLine('    mir:', mir, fmt, `${i}-mir`))
+      const inv = invertSequence(cube, seq)
+      out.push(toLine(cube, '    inv:', inv, fmt, `${i}-inv`))
+      const mir = mirrorSequence(cube, seq)
+      if (mir !== null) out.push(toLine(cube, '    mir:', mir, fmt, `${i}-mir`))
     }
   })
   return out
 }
 
-function toLine(idxLabel: string, seq: Move[], fmt: (m: readonly Move[]) => string, key: string): ResultLine {
+function toLine(cube: CubeSpec, idxLabel: string, seq: Move[], fmt: (m: readonly Move[]) => string, key: string): ResultLine {
   const text = seq.length ? fmt(seq) : '(already matches)'
   const names = seq.map((m) => m.name)
-  const label = seq.length ? (algsKnown.lookup(names) || userAlgs.lookup(names)) : null
+  const label = seq.length ? (algsKnown.lookup(cube.N, names) || userAlgs.lookup(cube.N, names)) : null
   const tail = label ? `  [${label}]` : ''
   return { key, seq, label: `${idxLabel}  (${seq.length})  ${text}${tail}` }
 }
@@ -62,6 +63,6 @@ export function ResultsList({ lines, selectedIdx, onSelect, onCopy }: Props) {
   )
 }
 
-export function namesToMoves(names: readonly string[]): Move[] {
-  return names.map((n) => MOVE_REGISTRY[n]).filter(Boolean)
+export function namesToMoves(cube: CubeSpec, names: readonly string[]): Move[] {
+  return names.map((n) => cube.MOVE_REGISTRY[n]).filter(Boolean)
 }

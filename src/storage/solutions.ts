@@ -1,7 +1,8 @@
-// Persistence for past search results (start, target, solutions).
+// Persistence for past search results (start, target, solutions), scoped by cube size.
 import type { CubeState } from '../cube/cube'
 
-const KEY = 'cube-alg-search:history'
+const BASE = 'cube-alg-search:history'
+const LEGACY = BASE
 
 export interface SolutionRecord {
   timestamp: string
@@ -11,9 +12,31 @@ export interface SolutionRecord {
   solutions: string[][]
 }
 
-export function loadAll(): SolutionRecord[] {
+export interface SolutionRecordWithSize extends SolutionRecord {
+  cubeSize: number
+}
+
+function keyFor(N: number): string {
+  return `${BASE}:${N}x${N}`
+}
+
+function migrateLegacy(): void {
   try {
-    const raw = localStorage.getItem(KEY)
+    const scoped3 = localStorage.getItem(keyFor(3))
+    const legacy = localStorage.getItem(LEGACY)
+    if (legacy && !scoped3) {
+      localStorage.setItem(keyFor(3), legacy)
+      localStorage.removeItem(LEGACY)
+    }
+  } catch {
+    // ignore
+  }
+}
+
+export function loadAll(N: number): SolutionRecord[] {
+  migrateLegacy()
+  try {
+    const raw = localStorage.getItem(keyFor(N))
     if (!raw) return []
     const data = JSON.parse(raw) as unknown
     return Array.isArray(data) ? (data as SolutionRecord[]) : []
@@ -22,17 +45,18 @@ export function loadAll(): SolutionRecord[] {
   }
 }
 
-function write(records: SolutionRecord[]): void {
-  localStorage.setItem(KEY, JSON.stringify(records))
+function write(N: number, records: SolutionRecord[]): void {
+  localStorage.setItem(keyFor(N), JSON.stringify(records))
 }
 
 export function appendRecord(
+  N: number,
   start: CubeState,
   target: CubeState,
   solutions: string[][],
   movesUsed: string[],
 ): void {
-  const records = loadAll()
+  const records = loadAll(N)
   const ts = new Date().toISOString().replace(/\.\d+Z$/, '').replace(/Z$/, '')
   records.push({
     timestamp: ts,
@@ -41,13 +65,22 @@ export function appendRecord(
     movesUsed: [...movesUsed],
     solutions,
   })
-  write(records)
+  write(N, records)
 }
 
-export function deleteRecord(index: number): void {
-  const records = loadAll()
+export function deleteRecord(N: number, index: number): void {
+  const records = loadAll(N)
   if (index >= 0 && index < records.length) {
     records.splice(index, 1)
-    write(records)
+    write(N, records)
   }
+}
+
+export function loadAllSizes(sizes: readonly number[]): SolutionRecordWithSize[] {
+  const out: SolutionRecordWithSize[] = []
+  for (const N of sizes) {
+    for (const rec of loadAll(N)) out.push({ ...rec, cubeSize: N })
+  }
+  out.sort((a, b) => a.timestamp.localeCompare(b.timestamp))
+  return out
 }

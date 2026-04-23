@@ -1,7 +1,6 @@
 // Parallel IDDFS via Web Workers. Partitions search by first move.
-import { MOVE_REGISTRY } from './cube'
 import { matches } from './search'
-import type { CubeState, Move } from './cube'
+import type { CubeSpec, CubeState, Move } from './cube'
 import type { WorkerIn, WorkerOut } from '../workers/search.worker'
 
 export interface ParallelOptions {
@@ -13,6 +12,7 @@ export interface ParallelOptions {
 }
 
 export function findAlgorithmsParallel(
+  cube: CubeSpec,
   start: CubeState,
   target: CubeState,
   allowedMoves: readonly Move[],
@@ -90,6 +90,7 @@ export function findAlgorithmsParallel(
       workers[widx].postMessage({
         type: 'run',
         jobId,
+        cubeSize: cube.N,
         start: Array.from(start),
         target: Array.from(target),
         allowedNames,
@@ -116,7 +117,7 @@ export function findAlgorithmsParallel(
           workerJobId[i] = null
           pending--
           for (const seqNames of msg.solutionNames) {
-            const seq = seqNames.map((n) => MOVE_REGISTRY[n])
+            const seq = seqNames.map((n) => cube.MOVE_REGISTRY[n])
             allSolutions.push(seq)
             if (onSolution) onSolution(seq)
           }
@@ -130,4 +131,3 @@ export function findAlgorithmsParallel(
     if (pending === 0 && !jobQueue.length) finish(false)
   })
 }
-

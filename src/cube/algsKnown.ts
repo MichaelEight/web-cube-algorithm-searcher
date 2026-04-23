@@ -1,12 +1,14 @@
-// Named-algorithm recognizer. Matches an exact move-name sequence to a known name.
+// Named-algorithm recognizer. Matches an exact move-name sequence to a known name, per cube size.
 
-const KNOWN: Array<[readonly string[], string]> = [
+type AlgList = Array<[readonly string[], string]>
+
+const KNOWN_3x3: AlgList = [
   [['R', 'U', "R'", "U'"], 'Sexy move'],
   [["L'", "U'", 'L', 'U'], 'Sexy (L variant)'],
   [["R'", 'F', 'R', "F'"], 'Sledgehammer'],
   [['R', 'U', "R'"], "Trigger (R U R')"],
   [['F', 'R', 'U', "R'", "U'", "F'"], 'OLL cross'],
-  [['f', 'R', 'U', "R'", "U'", "f'"], 'OLL cross (wide)'],
+  [['Fw', 'R', 'U', "R'", "U'", "Fw'"], 'OLL cross (wide)'],
   [['R', 'U', "R'", 'U', 'R', 'U2', "R'"], 'Sune'],
   [['R', 'U2', "R'", "U'", 'R', "U'", "R'"], 'Antisune'],
   [['R', 'U', "R'", "U'", "R'", 'F', 'R', "F'"], 'OLL 45 / Fat sune derivative'],
@@ -22,14 +24,35 @@ const KNOWN: Array<[readonly string[], string]> = [
   [['R', "U'", "R'"], "Trigger (R U' R')"],
 ]
 
+const KNOWN_2x2: AlgList = [
+  [['R', 'U', "R'", "U'"], 'Sexy move'],
+  [['R', 'U', "R'", 'U', 'R', 'U2', "R'"], 'Sune'],
+  [['R', 'U2', "R'", "U'", 'R', "U'", "R'"], 'Antisune'],
+  [['F', 'R', 'U', "R'", "U'", "F'"], 'OLL cross / T-OLL'],
+  [["R'", 'F', 'R', "F'"], 'Sledgehammer'],
+]
+
+const KNOWN_4x4: AlgList = [
+  [['R', 'U', "R'", "U'"], 'Sexy move'],
+  [['R', 'U', "R'", 'U', 'R', 'U2', "R'"], 'Sune'],
+  [["Rw", 'U', "Rw'", 'U', "Rw", 'U2', "Rw'"], 'Centers Sune (wide)'],
+]
+
+const ALGS_BY_SIZE: Record<number, AlgList> = {
+  2: KNOWN_2x2,
+  3: KNOWN_3x3,
+  4: KNOWN_4x4,
+}
+
 function eq(a: readonly string[], b: readonly string[]): boolean {
   if (a.length !== b.length) return false
   for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false
   return true
 }
 
-export function lookup(names: readonly string[]): string | null {
-  for (const [seq, label] of KNOWN) {
+export function lookup(N: number, names: readonly string[]): string | null {
+  const list = ALGS_BY_SIZE[N] ?? []
+  for (const [seq, label] of list) {
     if (eq(seq, names)) return label
   }
   return null

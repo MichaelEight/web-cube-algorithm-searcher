@@ -1,12 +1,13 @@
 /// <reference lib="webworker" />
 // Web Worker — runs IDDFS on a seeded first move. One job per first move.
 import type { CubeState, Move } from '../cube/cube'
-import { MOVE_REGISTRY } from '../cube/cube'
+import { createCube } from '../cube/cube'
 import { findAlgorithms } from '../cube/search'
 
 export interface WorkerJob {
   type: 'run'
   jobId: number
+  cubeSize: number
   start: CubeState
   target: CubeState
   allowedNames: string[]
@@ -46,11 +47,13 @@ self.addEventListener('message', (ev: MessageEvent<WorkerIn>) => {
     if (flag) flag.cancelled = true
     return
   }
-  const { jobId, start, target, allowedNames, firstMoveName, maxDepth, maxSolutions } = msg
-  const allowed: Move[] = allowedNames.map((n) => MOVE_REGISTRY[n])
-  const first = MOVE_REGISTRY[firstMoveName]
-  const seeded = new Array<number>(54)
-  for (let i = 0; i < 54; i++) seeded[i] = start[first.perm[i]]
+  const { jobId, cubeSize, start, target, allowedNames, firstMoveName, maxDepth, maxSolutions } = msg
+  const cube = createCube(cubeSize)
+  const allowed: Move[] = allowedNames.map((n) => cube.MOVE_REGISTRY[n])
+  const first = cube.MOVE_REGISTRY[firstMoveName]
+  const size = cube.stateSize
+  const seeded = new Array<number>(size)
+  for (let i = 0; i < size; i++) seeded[i] = start[first.perm[i]]
 
   const flag = { cancelled: false }
   cancelFlags.set(jobId, flag)

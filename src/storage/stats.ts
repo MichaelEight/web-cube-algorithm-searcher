@@ -1,5 +1,6 @@
-// Per-search statistics log.
-const KEY = 'cube-alg-search:stats'
+// Per-search statistics log, scoped by cube size.
+const BASE = 'cube-alg-search:stats'
+const LEGACY = BASE
 
 export interface StatEntry {
   timestamp: string
@@ -13,9 +14,27 @@ export interface StatEntry {
   cancelled: boolean
 }
 
-export function loadAll(): StatEntry[] {
+function keyFor(N: number): string {
+  return `${BASE}:${N}x${N}`
+}
+
+function migrateLegacy(): void {
   try {
-    const raw = localStorage.getItem(KEY)
+    const scoped3 = localStorage.getItem(keyFor(3))
+    const legacy = localStorage.getItem(LEGACY)
+    if (legacy && !scoped3) {
+      localStorage.setItem(keyFor(3), legacy)
+      localStorage.removeItem(LEGACY)
+    }
+  } catch {
+    // ignore
+  }
+}
+
+export function loadAll(N: number): StatEntry[] {
+  migrateLegacy()
+  try {
+    const raw = localStorage.getItem(keyFor(N))
     if (!raw) return []
     const data = JSON.parse(raw) as unknown
     return Array.isArray(data) ? (data as StatEntry[]) : []
@@ -24,13 +43,29 @@ export function loadAll(): StatEntry[] {
   }
 }
 
-export function logEntry(entry: Omit<StatEntry, 'timestamp'>): void {
+export function logEntry(N: number, entry: Omit<StatEntry, 'timestamp'>): void {
   const ts = new Date().toISOString().replace(/\.\d+Z$/, '').replace(/Z$/, '')
-  const data = loadAll()
+  const data = loadAll(N)
   data.push({ timestamp: ts, ...entry })
-  localStorage.setItem(KEY, JSON.stringify(data))
+  localStorage.setItem(keyFor(N), JSON.stringify(data))
 }
 
-export function clearAll(): void {
-  localStorage.setItem(KEY, '[]')
+export function clearAll(N: number): void {
+  localStorage.setItem(keyFor(N), '[]')
+}
+
+export interface StatEntryWithSize extends StatEntry {
+  cubeSize: number
+}
+
+export function loadAllSizes(sizes: readonly number[]): StatEntryWithSize[] {
+  const out: StatEntryWithSize[] = []
+  for (const N of sizes) {
+    for (const e of loadAll(N)) out.push({ ...e, cubeSize: N })
+  }
+  return out
+}
+
+export function clearAllSizes(sizes: readonly number[]): void {
+  for (const N of sizes) clearAll(N)
 }

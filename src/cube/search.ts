@@ -3,7 +3,6 @@ import {
   ANY,
   FACE_OPPOSITES,
   FACE_ORDER,
-  MOVE_REGISTRY,
   type CubeState,
   type Move,
 } from './cube'
@@ -21,7 +20,8 @@ export interface OnSolution {
 }
 
 export function matches(state: CubeState, target: CubeState): boolean {
-  for (let i = 0; i < 54; i++) {
+  const n = target.length
+  for (let i = 0; i < n; i++) {
     const t = target[i]
     if (t !== ANY && state[i] !== t) return false
   }
@@ -70,13 +70,14 @@ export function findAlgorithms(
     return { solutions, nodes: 0 }
   }
 
+  const stateSize = start.length
   const targetFixed: Array<[number, number]> = []
-  for (let i = 0; i < 54; i++) if (target[i] !== ANY) targetFixed.push([i, target[i]])
+  for (let i = 0; i < stateSize; i++) if (target[i] !== ANY) targetFixed.push([i, target[i]])
 
   let maxChanged = 0
   for (const m of allowedMoves) {
     let c = 0
-    for (let i = 0; i < 54; i++) if (m.perm[i] !== i) c++
+    for (let i = 0; i < stateSize; i++) if (m.perm[i] !== i) c++
     if (c > maxChanged) maxChanged = c
   }
   if (maxChanged === 0) maxChanged = 1
@@ -119,8 +120,8 @@ export function findAlgorithms(
     for (const mv of allowedMoves) {
       if (!pairAllowed(prev, mv)) continue
       const p = mv.perm
-      const newState = new Array<number>(54)
-      for (let i = 0; i < 54; i++) newState[i] = state[p[i]]
+      const newState = new Array<number>(stateSize)
+      for (let i = 0; i < stateSize; i++) newState[i] = state[p[i]]
       path.push(mv)
       const stop = dfs(newState, depthRemaining - 1, path, mv, currentDepth)
       path.pop()
@@ -144,10 +145,10 @@ export function findAlgorithms(
 
 // ---------- Bidirectional BFS (full target only) ----------
 
-function invName(name: string): string {
-  if (name.endsWith('2')) return name
-  if (name.endsWith("'")) return name.slice(0, -1)
-  return name + "'"
+function invertPerm(p: readonly number[]): readonly number[] {
+  const out = new Array<number>(p.length)
+  for (let i = 0; i < p.length; i++) out[p[i]] = i
+  return out
 }
 
 function stateKey(state: CubeState): string {
@@ -212,8 +213,9 @@ export function findAlgorithmsBidir(
   let fwdFrontier: string[] = [startKey]
   let bwdFrontier: string[] = [targetKey]
 
+  const stateSize = start.length
   const invPermOf = new Map<string, readonly number[]>()
-  for (const m of allowedMoves) invPermOf.set(m.name, MOVE_REGISTRY[invName(m.name)].perm)
+  for (const m of allowedMoves) invPermOf.set(m.name, invertPerm(m.perm))
 
   const expand = (
     frontier: readonly string[],
@@ -225,8 +227,8 @@ export function findAlgorithmsBidir(
       const s = keyOf.get(sk)!
       for (const mv of allowedMoves) {
         const p = useInverse ? invPermOf.get(mv.name)! : mv.perm
-        const ns = new Array<number>(54)
-        for (let i = 0; i < 54; i++) ns[i] = s[p[i]]
+        const ns = new Array<number>(stateSize)
+        for (let i = 0; i < stateSize; i++) ns[i] = s[p[i]]
         const nk = stateKey(ns)
         if (visited.has(nk)) continue
         visited.set(nk, { parent: sk, move: mv })

@@ -1,9 +1,28 @@
-// User-named algorithm library.
-const KEY = 'cube-alg-search:user-algs'
+// User-named algorithm library, scoped by cube size.
+const BASE = 'cube-alg-search:user-algs'
+const LEGACY = BASE
 
-export function loadAll(): Record<string, string[]> {
+function keyFor(N: number): string {
+  return `${BASE}:${N}x${N}`
+}
+
+function migrateLegacy(): void {
   try {
-    const raw = localStorage.getItem(KEY)
+    const scoped3 = localStorage.getItem(keyFor(3))
+    const legacy = localStorage.getItem(LEGACY)
+    if (legacy && !scoped3) {
+      localStorage.setItem(keyFor(3), legacy)
+      localStorage.removeItem(LEGACY)
+    }
+  } catch {
+    // ignore
+  }
+}
+
+export function loadAll(N: number): Record<string, string[]> {
+  migrateLegacy()
+  try {
+    const raw = localStorage.getItem(keyFor(N))
     if (!raw) return {}
     const data = JSON.parse(raw) as unknown
     if (!data || typeof data !== 'object') return {}
@@ -19,27 +38,27 @@ export function loadAll(): Record<string, string[]> {
   }
 }
 
-function write(data: Record<string, string[]>): void {
-  localStorage.setItem(KEY, JSON.stringify(data))
+function write(N: number, data: Record<string, string[]>): void {
+  localStorage.setItem(keyFor(N), JSON.stringify(data))
 }
 
-export function saveAlg(name: string, moveNames: string[]): void {
-  const data = loadAll()
+export function saveAlg(N: number, name: string, moveNames: string[]): void {
+  const data = loadAll(N)
   data[name] = [...moveNames]
-  write(data)
+  write(N, data)
 }
 
-export function deleteAlg(name: string): void {
-  const data = loadAll()
+export function deleteAlg(N: number, name: string): void {
+  const data = loadAll(N)
   if (name in data) {
     delete data[name]
-    write(data)
+    write(N, data)
   }
 }
 
-export function lookup(moveNames: readonly string[]): string | null {
+export function lookup(N: number, moveNames: readonly string[]): string | null {
   const target = moveNames.join('|')
-  const data = loadAll()
+  const data = loadAll(N)
   for (const [name, seq] of Object.entries(data)) {
     if (seq.join('|') === target) return name
   }
