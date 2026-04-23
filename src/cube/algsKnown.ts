@@ -18,7 +18,7 @@ const KNOWN: Array<[readonly string[], string]> = [
   [['R', 'U', "R'", "F'", 'R', 'U', "R'", "U'", "R'", 'F', 'R2', "U'", "R'"], 'Jb-perm'],
   [['F', 'R', "U'", "R'", "U'", 'R', 'U', "R'", "F'", 'R', 'U', "R'", "U'", "R'", 'F', 'R', "F'"], 'Y-perm'],
   [['R', 'U2', "R'", "U'", 'R', 'U2', "L'", 'U', "R'", "U'", 'L'], 'Ga-perm (Anti-Ga sim)'],
-  [['U', 'R', "U'", "R'"], 'F2L insert (back slot)'],
+  [['U', 'R', "U'", "R'"], 'F2L insert (front slot)'],
   [['R', "U'", "R'"], "Trigger (R U' R')"],
 ]
 
