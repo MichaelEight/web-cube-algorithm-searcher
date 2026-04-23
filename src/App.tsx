@@ -8,8 +8,8 @@ import {
   type Move,
 } from './cube/cube'
 import { parseSequence } from './cube/notation'
-import { findAlgorithms, findAlgorithmsBidir } from './cube/search'
 import { findAlgorithmsParallel } from './cube/parallel'
+import { findAlgorithmsInWorker } from './cube/singleWorker'
 import { simplifyAndDedupe } from './cube/simplify'
 import { CubeNet } from './components/CubeNet'
 import { Cube3D } from './components/Cube3D'
@@ -23,6 +23,7 @@ import * as statesStore from './storage/states'
 import * as solutionsStore from './storage/solutions'
 import * as statsStore from './storage/stats'
 import * as userAlgs from './storage/userAlgs'
+import * as sessionStore from './storage/session'
 
 type Method = 'iddfs' | 'bidir' | 'parallel'
 type CubeSize = 2 | 3 | 4
@@ -43,6 +44,35 @@ function buildMoveKeyMap(cube: CubeSpec): Record<string, string> {
     if (cube.MOVE_REGISTRY[name]) out[k] = name
   }
   return out
+}
+
+function formatBytes(n: number): string {
+  if (n >= 1024 * 1024 * 1024) return `${(n / (1024 * 1024 * 1024)).toFixed(2)} GB`
+  if (n >= 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(1)} MB`
+  if (n >= 1024) return `${(n / 1024).toFixed(1)} KB`
+  return `${n} B`
+}
+
+const MAX_DEPTH_LIMIT = 30
+const MAX_SOLUTIONS_LIMIT = 50
+
+function parseIntInRange(s: string, min: number, max: number): number | null {
+  if (!/^\d+$/.test(s.trim())) return null
+  const n = parseInt(s, 10)
+  if (!Number.isFinite(n) || n < min || n > max) return null
+  return n
+}
+
+function formatDuration(seconds: number): string {
+  if (!Number.isFinite(seconds) || seconds < 0) return '—'
+  if (seconds > 60 * 60 * 24) return '> 1 day'
+  if (seconds < 1) return `< 1s`
+  if (seconds < 60) return `${Math.round(seconds)}s`
+  const m = Math.floor(seconds / 60)
+  const s = Math.round(seconds - m * 60)
+  if (m < 60) return `${m}m ${s}s`
+  const h = Math.floor(m / 60)
+  return `${h}h ${m - h * 60}m`
 }
 
 function loadSize(): CubeSize {
@@ -69,11 +99,24 @@ function useViewport(): { w: number; h: number } {
   return v
 }
 
+function mergeToggles(defaults: MoveToggles, raw: Record<string, unknown>): MoveToggles {
+  const out: MoveToggles = { ...defaults }
+  for (const [k, v] of Object.entries(raw)) {
+    if (k in defaults && typeof v === 'boolean') out[k] = v
+  }
+  return out
+}
+
 export default function App() {
   const viewport = useViewport()
   const isMobile = viewport.w < 780
 
-  const [cubeSize, setCubeSize] = useState<CubeSize>(() => loadSize())
+  // Initial cube size and session snapshot are read once on mount and feed every useState below.
+  const initialCubeSize = useMemo<CubeSize>(loadSize, [])
+  const initialCube = useMemo(() => createCube(initialCubeSize), [initialCubeSize])
+  const initialSnap = useMemo(() => sessionStore.loadSession(initialCubeSize), [initialCubeSize])
+
+  const [cubeSize, setCubeSize] = useState<CubeSize>(() => initialCubeSize)
   const cube = useMemo(() => createCube(cubeSize), [cubeSize])
 
   const cubeDims = useMemo(() => {
@@ -93,57 +136,136 @@ export default function App() {
     return { sticker, scale3d }
   }, [viewport.w, viewport.h, isMobile, cube])
 
-  const [startState, setStartState] = useState<CubeState>(() => [...cube.SOLVED])
-  const [targetState, setTargetState] = useState<CubeState>(() => [...cube.SOLVED])
-  const [selectedColor, setSelectedColor] = useState<number>(W)
-  const [toggles, setToggles] = useState<MoveToggles>(() => buildDefaultToggles(cube))
-  const [maxDepth, setMaxDepth] = useState(10)
-  const [maxSolutions, setMaxSolutions] = useState(1)
-  const [groupTerms, setGroupTerms] = useState(true)
-  const [showAlts, setShowAlts] = useState(false)
-  const [method, setMethod] = useState<Method>('parallel')
-  const [status, setStatus] = useState('Ready.')
+  const [startState, setStartState] = useState<CubeState>(() =>
+    initialSnap ? [...initialSnap.start] : [...initialCube.SOLVED],
+  )
+  const [targetState, setTargetState] = useState<CubeState>(() =>
+    initialSnap ? [...initialSnap.target] : [...initialCube.SOLVED],
+  )
+  const [selectedColor, setSelectedColor] = useState<number>(() => initialSnap?.selectedColor ?? W)
+  const [toggles, setToggles] = useState<MoveToggles>(() => {
+    const defaults = buildDefaultToggles(initialCube)
+    return initialSnap ? mergeToggles(defaults, initialSnap.toggles) : defaults
+  })
+  const [maxDepthText, setMaxDepthText] = useState(() => String(initialSnap?.maxDepth ?? 10))
+  const [maxSolutionsText, setMaxSolutionsText] = useState(() => String(initialSnap?.maxSolutions ?? 1))
+  const [groupTerms, setGroupTerms] = useState(() => initialSnap?.groupTerms ?? true)
+  const [showAlts, setShowAlts] = useState(() => initialSnap?.showAlts ?? false)
+  const [method, setMethod] = useState<Method>(() => initialSnap?.method ?? 'parallel')
+  const [status, setStatus] = useState(() => (initialSnap ? 'Restored previous session.' : 'Ready.'))
   const [depthText, setDepthText] = useState('')
   const [progressPct, setProgressPct] = useState(0)
-  const [lastSolutions, setLastSolutions] = useState<Move[][]>([])
-  const [selectedResult, setSelectedResult] = useState<number | null>(null)
+  const [lastSolutions, setLastSolutions] = useState<Move[][]>(() =>
+    initialSnap ? sessionStore.rehydrateSolutions(initialCube, initialSnap.solutionNames) : [],
+  )
+  const [selectedResult, setSelectedResult] = useState<number | null>(() => initialSnap?.selectedResult ?? null)
   const [searching, setSearching] = useState(false)
   const [showHistory, setShowHistory] = useState(false)
   const [showStats, setShowStats] = useState(false)
   const [loadTarget, setLoadTarget] = useState<'start' | 'target' | null>(null)
-  const [activeCube, setActiveCube] = useState<'start' | 'target'>('start')
-  const [startMovesText, setStartMovesText] = useState('')
+  const [activeCube, setActiveCube] = useState<'start' | 'target'>(() => initialSnap?.activeCube ?? 'start')
+  const [startMovesText, setStartMovesText] = useState(() => initialSnap?.startMovesText ?? '')
   const [startMovesStatus, setStartMovesStatus] = useState('')
-  const [targetMovesText, setTargetMovesText] = useState('')
+  const [targetMovesText, setTargetMovesText] = useState(() => initialSnap?.targetMovesText ?? '')
   const [targetMovesStatus, setTargetMovesStatus] = useState('')
+
+  const maxDepth = parseIntInRange(maxDepthText, 1, MAX_DEPTH_LIMIT)
+  const maxSolutions = parseIntInRange(maxSolutionsText, 1, MAX_SOLUTIONS_LIMIT)
+  const inputsValid = maxDepth !== null && maxSolutions !== null
 
   const cancelRef = useRef<{ cancelled: boolean } | null>(null)
   const estBranchingRef = useRef(1)
   const currentDepthRef = useRef(0)
   const depthNodesStartRef = useRef(0)
   const progressRef = useRef({ depth: 0, nodes: 0, found: 0, dirty: false })
+  const searchStartRef = useRef(0)
+  const searchMethodRef = useRef<Method>('parallel')
+  const [peakHeap, setPeakHeap] = useState(0)
+  const [etaSec, setEtaSec] = useState<number | null>(null)
 
-  // Reset per-size state when cube changes.
+  // Session writes are suspended during hydration. Initial state came from storage (see the lazy
+  // initializers above), so writes are enabled immediately; they only pause while switching
+  // between cube sizes.
+  const sessionReadyRef = useRef(true)
+  const didMountRef = useRef(false)
+
+  // On subsequent cube-size changes, load the snapshot for the new size (or reset to defaults).
+  // The initial render is skipped — that path is covered by the lazy initializers.
   useEffect(() => {
-    setStartState([...cube.SOLVED])
-    setTargetState([...cube.SOLVED])
-    setToggles(buildDefaultToggles(cube))
-    setLastSolutions([])
-    setSelectedResult(null)
-    setStatus('Ready.')
-    setProgressPct(0)
-    setDepthText('')
-    setStartMovesText('')
-    setStartMovesStatus('')
-    setTargetMovesText('')
-    setTargetMovesStatus('')
-  }, [cube])
+    if (!didMountRef.current) { didMountRef.current = true; return }
+    sessionReadyRef.current = false
+    const snap = sessionStore.loadSession(cubeSize)
+    if (snap) {
+      setStartState([...snap.start])
+      setTargetState([...snap.target])
+      setToggles(mergeToggles(buildDefaultToggles(cube), snap.toggles))
+      setLastSolutions(sessionStore.rehydrateSolutions(cube, snap.solutionNames))
+      setSelectedResult(snap.selectedResult)
+      setMaxDepthText(String(snap.maxDepth))
+      setMaxSolutionsText(String(snap.maxSolutions))
+      setGroupTerms(snap.groupTerms)
+      setShowAlts(snap.showAlts)
+      setMethod(snap.method)
+      setSelectedColor(snap.selectedColor)
+      setActiveCube(snap.activeCube)
+      setStartMovesText(snap.startMovesText)
+      setTargetMovesText(snap.targetMovesText)
+      setStartMovesStatus('')
+      setTargetMovesStatus('')
+      setStatus('Restored previous session.')
+      setProgressPct(0)
+      setDepthText('')
+    } else {
+      setStartState([...cube.SOLVED])
+      setTargetState([...cube.SOLVED])
+      setToggles(buildDefaultToggles(cube))
+      setLastSolutions([])
+      setSelectedResult(null)
+      setStatus('Ready.')
+      setProgressPct(0)
+      setDepthText('')
+      setStartMovesText('')
+      setStartMovesStatus('')
+      setTargetMovesText('')
+      setTargetMovesStatus('')
+    }
+    sessionReadyRef.current = true
+  }, [cube, cubeSize])
 
   useEffect(() => {
     try { localStorage.setItem(SIZE_STORAGE_KEY, String(cubeSize)) } catch {
       // ignore
     }
   }, [cubeSize])
+
+  // Persist the active session whenever tracked state changes (after load/default has run).
+  // Invalid depth/solutions inputs skip the save so we don't stomp the stored value while the
+  // user is mid-edit.
+  useEffect(() => {
+    if (!sessionReadyRef.current) return
+    if (startState.length !== cube.stateSize || targetState.length !== cube.stateSize) return
+    if (maxDepth === null || maxSolutions === null) return
+    sessionStore.saveSession(cubeSize, {
+      start: [...startState],
+      target: [...targetState],
+      toggles,
+      solutionNames: lastSolutions.map((s) => s.map((m) => m.name)),
+      selectedResult,
+      maxDepth,
+      maxSolutions,
+      groupTerms,
+      showAlts,
+      method,
+      selectedColor,
+      activeCube,
+      startMovesText,
+      targetMovesText,
+    })
+  }, [
+    cube, cubeSize, startState, targetState, toggles, lastSolutions,
+    selectedResult, maxDepth, maxSolutions, groupTerms, showAlts,
+    method, selectedColor, activeCube, startMovesText, targetMovesText,
+  ])
 
   useEffect(() => {
     if (!searching) return
@@ -155,17 +277,67 @@ export default function App() {
         currentDepthRef.current = p.depth
         depthNodesStartRef.current = p.nodes
       }
-      const estTotal = Math.pow(estBranchingRef.current, Math.max(1, p.depth))
+      const b = estBranchingRef.current
+      const estTotal = Math.pow(b, Math.max(1, p.depth))
       const inDepth = Math.max(0, p.nodes - depthNodesStartRef.current)
       const pct = Math.min(100, 100 * inDepth / Math.max(1, estTotal))
-      setStatus(`Searching… Depth ${p.depth}/${maxDepth} · ${p.nodes.toLocaleString()} nodes · ${p.found} found`)
+      setStatus(`Searching… Depth ${p.depth}/${maxDepth ?? '?'} · ${p.nodes.toLocaleString()} nodes · ${p.found} found`)
       setDepthText(`${pct.toFixed(1)}% of est. depth-${p.depth} space`)
       setProgressPct(pct)
+
+      // ETA: IDDFS / parallel only. Estimate remaining nodes via geometric sum of future depths
+      // plus the unexplored fraction of the current depth, then divide by current throughput.
+      if (searchMethodRef.current !== 'bidir' && maxDepth !== null) {
+        const remainingCurrent = Math.max(0, estTotal - inDepth)
+        let remainingFuture = 0
+        for (let d = p.depth + 1; d <= maxDepth; d++) remainingFuture += Math.pow(b, d)
+        const remainingNodes = remainingCurrent + remainingFuture
+        const elapsedS = (performance.now() - searchStartRef.current) / 1000
+        const rate = p.nodes / Math.max(0.01, elapsedS)
+        if (rate > 0 && remainingNodes >= 0) {
+          setEtaSec(remainingNodes / rate)
+        }
+      } else {
+        setEtaSec(null)
+      }
     }, 120)
     return () => clearInterval(tick)
   }, [searching, maxDepth])
 
   const lines: ResultLine[] = buildResultLines(cube, lastSolutions, groupTerms, showAlts)
+
+  const methodSuggestion = useMemo<{ text: string; switchTo: Method } | null>(() => {
+    const hasAny = targetState.some((v) => v === ANY)
+    const depthVal = maxDepth ?? 0
+    const deep = depthVal >= 10
+    const veryDeep = depthVal >= 12
+    const bigCube = cube.N >= 4
+    if (method === 'bidir' && hasAny) {
+      return {
+        text: "Target has don't-care cells — bidir needs a fully defined target. Switch to iddfs (or parallel) to handle wildcards.",
+        switchTo: 'parallel',
+      }
+    }
+    if (method === 'iddfs' && bigCube && depthVal >= 8) {
+      return {
+        text: `${cube.N}×${cube.N} at depth ${depthVal} — parallel splits the search across workers and is usually much faster here.`,
+        switchTo: 'parallel',
+      }
+    }
+    if (!hasAny && deep && method !== 'bidir') {
+      return {
+        text: `Concrete target and depth ${depthVal} — bidir meets in the middle and is usually much faster past depth 10.`,
+        switchTo: 'bidir',
+      }
+    }
+    if (method === 'iddfs' && veryDeep) {
+      return {
+        text: `Depth ${depthVal} with iddfs will blow up quickly — parallel exhausts the space across workers.`,
+        switchTo: 'parallel',
+      }
+    }
+    return null
+  }, [method, targetState, maxDepth, cube])
 
   const collectAllowed = useCallback((): Move[] => cube.ALL_MOVES.filter((m) => toggles[m.name]), [cube, toggles])
 
@@ -207,9 +379,10 @@ export default function App() {
     statesStore.saveState(cube.N, trimmed, which === 'start' ? startState : targetState)
   }
 
-  const renderFinal = useCallback((sols: Move[][], elapsed: number, nodes: number, cancelled: boolean) => {
+  const renderFinal = useCallback((sols: Move[][], elapsed: number, nodes: number, cancelled: boolean, heapBytes: number) => {
     setSelectedResult(null)
-    const statsLine = `${elapsed.toFixed(2)}s, ${nodes.toLocaleString()} combos`
+    const memNote = heapBytes > 0 ? `, peak ~${formatBytes(heapBytes)}` : ''
+    const statsLine = `${elapsed.toFixed(2)}s, ${nodes.toLocaleString()} combos${memNote}`
     if (!sols.length) {
       setLastSolutions([])
       setStatus(cancelled ? `Cancelled. ${statsLine}` : `No algorithm up to depth ${maxDepth}. ${statsLine}`)
@@ -227,6 +400,8 @@ export default function App() {
 
   const startSearch = async () => {
     if (searching) return
+    if (maxDepth === null) { setStatus(`Max length must be an integer 1–${MAX_DEPTH_LIMIT}.`); return }
+    if (maxSolutions === null) { setStatus(`Max solutions must be an integer 1–${MAX_SOLUTIONS_LIMIT}.`); return }
     const allowed = collectAllowed()
     if (!allowed.length) { setStatus('Select at least one move.'); return }
 
@@ -247,11 +422,16 @@ export default function App() {
     currentDepthRef.current = 0
     depthNodesStartRef.current = 0
     progressRef.current = { depth: 0, nodes: 0, found: 0, dirty: false }
+    searchStartRef.current = performance.now()
+    searchMethodRef.current = chosen
+    setPeakHeap(0)
+    setEtaSec(null)
 
     const cancel = { cancelled: false }
     cancelRef.current = cancel
     const t0 = performance.now()
     let lastNodes = 0
+    let lastHeap = 0
     const liveSols: Move[][] = []
 
     const onProgress = (depth: number, nodes: number, found: number) => {
@@ -264,25 +444,30 @@ export default function App() {
       setLastSolutions(simplifyAndDedupe(cube, liveSols))
     }
 
+    const onHeap = (peak: number) => {
+      lastHeap = peak
+      setPeakHeap(peak)
+    }
+
     try {
-      let result: { solutions: Move[][]; nodes: number }
-      if (chosen === 'bidir') {
-        result = findAlgorithmsBidir(startState, targetState, allowed, {
-          maxDepth, maxSolutions, cancel, progressCb: onProgress, onSolution: onSol,
-        })
-      } else if (chosen === 'parallel') {
+      let result: { solutions: Move[][]; nodes: number; peakHeap: number }
+      if (chosen === 'parallel') {
         result = await findAlgorithmsParallel(cube, startState, targetState, allowed, {
-          maxDepth, maxSolutions, cancel, progressCb: onProgress, onSolution: onSol,
+          maxDepth, maxSolutions, cancel, progressCb: onProgress, onSolution: onSol, onHeap,
         })
       } else {
-        result = findAlgorithms(startState, targetState, allowed, {
-          maxDepth, maxSolutions, cancel, progressCb: onProgress, onSolution: onSol,
+        // iddfs and bidir both run off-thread via a single worker so the UI stays responsive.
+        const r = await findAlgorithmsInWorker(chosen, cube, startState, targetState, allowed, {
+          maxDepth, maxSolutions, cancel, progressCb: onProgress, onSolution: onSol, onHeap,
         })
+        result = { solutions: r.solutions, nodes: r.nodes, peakHeap: r.peakHeap }
       }
       const elapsed = (performance.now() - t0) / 1000
       const sols = result.solutions
       const nodes = Math.max(result.nodes, lastNodes)
-      renderFinal(sols, elapsed, nodes, cancel.cancelled)
+      const peak = Math.max(result.peakHeap, lastHeap)
+      setPeakHeap(peak)
+      renderFinal(sols, elapsed, nodes, cancel.cancelled, peak)
 
       const allowedNames = allowed.map((m) => m.name)
       const shortest = sols.length ? Math.min(...sols.map((s) => s.length)) : null
@@ -295,6 +480,7 @@ export default function App() {
         found: sols.length,
         shortestLen: shortest,
         cancelled: cancel.cancelled,
+        peakHeapBytes: peak > 0 ? peak : undefined,
       })
       if (sols.length && !(sols.length === 1 && sols[0].length === 0)) {
         solutionsStore.appendRecord(
@@ -443,16 +629,24 @@ export default function App() {
         <label className="field-label">
           Max length:
           <input
-            type="number" min={1} max={14} value={maxDepth}
-            onChange={(e) => setMaxDepth(Math.max(1, Math.min(14, parseInt(e.target.value || '0', 10) || 1)))}
+            type="text"
+            inputMode="numeric"
+            value={maxDepthText}
+            onChange={(e) => setMaxDepthText(e.target.value)}
+            className={maxDepth === null ? 'input-invalid' : ''}
+            title={`Integer 1–${MAX_DEPTH_LIMIT}`}
             style={{ width: 60 }}
           />
         </label>
         <label className="field-label">
           Max solutions:
           <input
-            type="number" min={1} max={50} value={maxSolutions}
-            onChange={(e) => setMaxSolutions(Math.max(1, Math.min(50, parseInt(e.target.value || '0', 10) || 1)))}
+            type="text"
+            inputMode="numeric"
+            value={maxSolutionsText}
+            onChange={(e) => setMaxSolutionsText(e.target.value)}
+            className={maxSolutions === null ? 'input-invalid' : ''}
+            title={`Integer 1–${MAX_SOLUTIONS_LIMIT}`}
             style={{ width: 60 }}
           />
         </label>
@@ -482,8 +676,32 @@ parallel — multi-worker DFS. Deep HTM exhaustive.`}
           </div>
         </div>
       </div>
+      {methodSuggestion && (
+        <div className="method-suggestion">
+          <span className="method-suggestion-icon" aria-hidden>⚠</span>
+          <span className="method-suggestion-text">{methodSuggestion.text}</span>
+          <button
+            type="button"
+            className="method-suggestion-btn"
+            onClick={() => setMethod(methodSuggestion.switchTo)}
+          >
+            Use {methodSuggestion.switchTo}
+          </button>
+        </div>
+      )}
       <div className="row" style={{ marginTop: 6 }}>
-        <button className="accent" onClick={startSearch} disabled={searching}>Search</button>
+        <button
+          className="accent"
+          onClick={startSearch}
+          disabled={searching || !inputsValid}
+          title={!inputsValid ? 'Fix highlighted fields first' : undefined}
+        >Search</button>
+        {!inputsValid && (
+          <span className="hint" style={{ color: '#e06b6b' }}>
+            {maxDepth === null ? `Max length must be 1–${MAX_DEPTH_LIMIT}. ` : ''}
+            {maxSolutions === null ? `Max solutions must be 1–${MAX_SOLUTIONS_LIMIT}.` : ''}
+          </span>
+        )}
         <button onClick={cancelSearch} disabled={!searching}>Cancel</button>
         <button onClick={() => setShowHistory(true)}>History…</button>
         <button onClick={() => setShowStats(true)}>Stats…</button>
@@ -513,6 +731,38 @@ parallel — multi-worker DFS. Deep HTM exhaustive.`}
         onCopy={copyToClipboard}
       />
     </>
+  )
+
+  const searchOverlay = searching && (
+    <div className="search-overlay" role="status" aria-live="polite">
+      <div className="search-overlay-card">
+        <div className="search-overlay-spinner" aria-hidden />
+        <div className="search-overlay-title">Searching…</div>
+        <div className="search-overlay-bar">
+          <div className="search-overlay-bar-fill" style={{ width: `${progressPct}%` }} />
+        </div>
+        <div className="search-overlay-meta">{depthText || ' '}</div>
+        <div className="search-overlay-meta">{status}</div>
+        <div className="search-overlay-meta">
+          Method: <strong>{method}</strong> · Cube: <strong>{cube.N}×{cube.N}</strong>
+        </div>
+        <div className="search-overlay-meta">
+          ETA to full scan: <strong>{etaSec === null ? (method === 'bidir' ? 'unknown (bidir)' : 'computing…') : `~${formatDuration(etaSec)}`}</strong>
+        </div>
+        {peakHeap > 0 && (
+          <div className="search-overlay-meta">
+            Peak heap: <strong>{formatBytes(peakHeap)}</strong>
+          </div>
+        )}
+        {lastSolutions.length > 0 && (
+          <div className="search-overlay-meta">
+            Live solutions: <strong>{lastSolutions.length}</strong>
+          </div>
+        )}
+        <button className="search-overlay-cancel" onClick={cancelSearch}>Cancel search (Esc)</button>
+        <div className="search-overlay-hint">Press Esc any time to cancel.</div>
+      </div>
+    </div>
   )
 
   const modals = (
@@ -594,7 +844,7 @@ parallel — multi-worker DFS. Deep HTM exhaustive.`}
           />
           <button onClick={applyCurrent}>Apply</button>
         </div>
-        {currentMovesStatus && <div className="status">{currentMovesStatus}</div>}
+        <div className="status moves-status-line">{currentMovesStatus || ' '}</div>
 
         <div className="mobile-palette">
           <span className="palette-title">Paint</span>
@@ -619,6 +869,7 @@ parallel — multi-worker DFS. Deep HTM exhaustive.`}
         </details>
 
         {modals}
+        {searchOverlay}
       </div>
     )
   }
@@ -665,7 +916,7 @@ parallel — multi-worker DFS. Deep HTM exhaustive.`}
             />
             <button onClick={() => applyMoves('start')}>Apply</button>
           </div>
-          {startMovesStatus && <div className="status">{startMovesStatus}</div>}
+          <div className="status moves-status-line">{startMovesStatus || ' '}</div>
         </div>
 
         <div className="palette-column">
@@ -712,7 +963,7 @@ parallel — multi-worker DFS. Deep HTM exhaustive.`}
             />
             <button onClick={() => applyMoves('target')}>Apply</button>
           </div>
-          {targetMovesStatus && <div className="status">{targetMovesStatus}</div>}
+          <div className="status moves-status-line">{targetMovesStatus || ' '}</div>
         </div>
         <div className={`cube-frame three-d${activeCube === 'target' ? ' active' : ''}`}>
           <Cube3D cube={cube} state={targetState} scale={cube3dScale} onActivate={() => setActiveCube('target')} />
@@ -747,6 +998,7 @@ parallel — multi-worker DFS. Deep HTM exhaustive.`}
       </div>
 
       {modals}
+      {searchOverlay}
     </div>
   )
 }

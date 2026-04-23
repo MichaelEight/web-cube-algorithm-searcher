@@ -1,8 +1,6 @@
 // IDDFS algorithm search with don't-care matching and pruning.
 import {
   ANY,
-  FACE_OPPOSITES,
-  FACE_ORDER,
   type CubeState,
   type Move,
 } from './cube'
@@ -31,11 +29,12 @@ export function matches(state: CubeState, target: CubeState): boolean {
 function pairAllowed(prev: Move | null, cur: Move): boolean {
   if (prev === null) return true
   if (prev.faceGroup === cur.faceGroup) return false
-  const pf = prev.faceGroup, cf = cur.faceGroup
-  if (pf in FACE_OPPOSITES && FACE_OPPOSITES[pf] === cf) {
-    if (FACE_ORDER[cf] < FACE_ORDER[pf]) return false
-  }
-  return true
+  if (prev.axis !== cur.axis) return true
+  // Same axis: moves whose layers overlap interfere and should be folded by simplification, so
+  // disallow consecutive pairs. Moves with disjoint layers commute; force a canonical order
+  // (higher-index layer first) so the search explores each pair exactly once.
+  if ((prev.layerMask & cur.layerMask) !== 0) return false
+  return prev.layerMask > cur.layerMask
 }
 
 export interface SearchOptions {

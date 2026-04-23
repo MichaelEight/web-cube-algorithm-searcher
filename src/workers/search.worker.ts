@@ -28,17 +28,24 @@ export interface WorkerResult {
   jobId: number
   solutionNames: string[][]
   nodes: number
+  heapUsed?: number
 }
 
 export interface WorkerProgress {
   type: 'progress'
   jobId: number
   nodes: number
+  heapUsed?: number
 }
 
 export type WorkerOut = WorkerResult | WorkerProgress
 
 const cancelFlags = new Map<number, { cancelled: boolean }>()
+
+function sampleHeap(): number | undefined {
+  const perf = (self as unknown as { performance?: { memory?: { usedJSHeapSize?: number } } }).performance
+  return perf?.memory?.usedJSHeapSize
+}
 
 self.addEventListener('message', (ev: MessageEvent<WorkerIn>) => {
   const msg = ev.data
@@ -63,7 +70,7 @@ self.addEventListener('message', (ev: MessageEvent<WorkerIn>) => {
     maxSolutions,
     cancel: flag,
     progressCb: (_d, n) => {
-      const out: WorkerProgress = { type: 'progress', jobId, nodes: n }
+      const out: WorkerProgress = { type: 'progress', jobId, nodes: n, heapUsed: sampleHeap() }
       ;(self as unknown as Worker).postMessage(out)
     },
   })
@@ -71,6 +78,6 @@ self.addEventListener('message', (ev: MessageEvent<WorkerIn>) => {
   cancelFlags.delete(jobId)
 
   const withFirst: string[][] = solutions.map((s) => [firstMoveName, ...s.map((m) => m.name)])
-  const out: WorkerResult = { type: 'done', jobId, solutionNames: withFirst, nodes }
+  const out: WorkerResult = { type: 'done', jobId, solutionNames: withFirst, nodes, heapUsed: sampleHeap() }
   ;(self as unknown as Worker).postMessage(out)
 })

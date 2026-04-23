@@ -9,6 +9,7 @@ export interface ParallelOptions {
   cancel?: { cancelled: boolean }
   progressCb?: (depth: number, nodes: number, found: number) => void
   onSolution?: (path: readonly Move[]) => void
+  onHeap?: (peakBytes: number) => void
 }
 
 export function findAlgorithmsParallel(
@@ -17,15 +18,16 @@ export function findAlgorithmsParallel(
   target: CubeState,
   allowedMoves: readonly Move[],
   opts: ParallelOptions = {},
-): Promise<{ solutions: Move[][]; nodes: number }> {
+): Promise<{ solutions: Move[][]; nodes: number; peakHeap: number }> {
   const maxDepth = opts.maxDepth ?? 10
   const maxSolutions = opts.maxSolutions ?? 5
   const cancel = opts.cancel
   const progressCb = opts.progressCb
   const onSolution = opts.onSolution
+  const onHeap = opts.onHeap
 
-  if (matches(start, target)) return Promise.resolve({ solutions: [[]], nodes: 0 })
-  if (maxDepth < 1 || !allowedMoves.length) return Promise.resolve({ solutions: [], nodes: 0 })
+  if (matches(start, target)) return Promise.resolve({ solutions: [[]], nodes: 0, peakHeap: 0 })
+  if (maxDepth < 1 || !allowedMoves.length) return Promise.resolve({ solutions: [], nodes: 0, peakHeap: 0 })
 
   const allowedNames = allowedMoves.map((m) => m.name)
   const numWorkers = Math.max(1, Math.min(
@@ -50,6 +52,15 @@ export function findAlgorithmsParallel(
     let pending = 0
     let terminated = false
     let totalNodes = 0
+    const heapByWorker = new Array<number>(numWorkers).fill(0)
+    let peakHeapSum = 0
+    const bumpHeap = (widx: number, h?: number) => {
+      if (typeof h !== 'number' || h <= 0) return
+      if (h > heapByWorker[widx]) heapByWorker[widx] = h
+      const sum = heapByWorker.reduce((a, b) => a + b, 0)
+      if (sum > peakHeapSum) peakHeapSum = sum
+      onHeap?.(peakHeapSum)
+    }
 
     const cancelInterval = setInterval(() => {
       if (cancel?.cancelled && !terminated) finish(true)
@@ -66,11 +77,11 @@ export function findAlgorithmsParallel(
         w.terminate()
       }
       if (cancelled) {
-        resolve({ solutions: [], nodes: totalNodes })
+        resolve({ solutions: [], nodes: totalNodes, peakHeap: peakHeapSum })
         return
       }
       allSolutions.sort((a, b) => a.length - b.length)
-      resolve({ solutions: allSolutions.slice(0, maxSolutions), nodes: totalNodes })
+      resolve({ solutions: allSolutions.slice(0, maxSolutions), nodes: totalNodes, peakHeap: peakHeapSum })
     }
 
     const assign = (widx: number) => {
@@ -107,12 +118,14 @@ export function findAlgorithmsParallel(
           nodesByWorker[i] = msg.nodes
           const sum = nodesByWorker.reduce((a, b) => a + b, 0)
           totalNodes = sum
+          bumpHeap(i, msg.heapUsed)
           if (progressCb) progressCb(maxDepth, sum, allSolutions.length)
           return
         }
         if (msg.type === 'done') {
           totalNodes += msg.nodes - nodesByWorker[i]
           nodesByWorker[i] = 0
+          bumpHeap(i, msg.heapUsed)
           workerBusy[i] = false
           workerJobId[i] = null
           pending--

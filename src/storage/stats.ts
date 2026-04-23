@@ -12,6 +12,7 @@ export interface StatEntry {
   found: number
   shortestLen: number | null
   cancelled: boolean
+  peakHeapBytes?: number
 }
 
 function keyFor(N: number): string {

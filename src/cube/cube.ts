@@ -42,6 +42,9 @@ export interface Move {
   readonly faceGroup: string
   readonly axis: 'x' | 'y' | 'z'
   readonly category: MoveCategory
+  // Bitmask of layer indices along `axis` that this move rotates. Bit k = layer at sticker-coord
+  // k - (N-1)/2. Used by the search to fold away same-axis commuting pairs.
+  readonly layerMask: number
 }
 
 type Sticker = readonly [Vec3, Vec3]
@@ -308,20 +311,33 @@ function moveDefs(N: number): MoveDef[] {
   return defs
 }
 
+function computeLayerMask(N: number, axis: 'x' | 'y' | 'z', pred: Predicate): number {
+  const ai = axisIndex(axis)
+  let mask = 0
+  for (let k = 0; k < N; k++) {
+    const v = k - (N - 1) / 2
+    const pos: Vec3 = ai === 0 ? [v, 0, 0] : ai === 1 ? [0, v, 0] : [0, 0, v]
+    if (pred(pos)) mask |= 1 << k
+  }
+  return mask
+}
+
 function makeTriple(
   def: MoveDef,
   stickers: readonly Sticker[],
   idx: Map<string, number>,
   size: number,
+  N: number,
 ): Move[] {
   const p1 = buildPerm(def.matrix, def.pred, stickers, idx, size)
   const p2 = compose(p1, p1, size)
   const pi = inverse(p1, size)
   const name = def.baseName
+  const layerMask = computeLayerMask(N, def.axis, def.pred)
   return [
-    { name, perm: p1, faceGroup: def.faceGroup, axis: def.axis, category: def.category },
-    { name: name + "'", perm: pi, faceGroup: def.faceGroup, axis: def.axis, category: def.category },
-    { name: name + '2', perm: p2, faceGroup: def.faceGroup, axis: def.axis, category: def.category },
+    { name, perm: p1, faceGroup: def.faceGroup, axis: def.axis, category: def.category, layerMask },
+    { name: name + "'", perm: pi, faceGroup: def.faceGroup, axis: def.axis, category: def.category, layerMask },
+    { name: name + '2', perm: p2, faceGroup: def.faceGroup, axis: def.axis, category: def.category, layerMask },
   ]
 }
 
@@ -349,7 +365,7 @@ export function createCube(N: number): CubeSpec {
 
   const defs = moveDefs(N)
   const moves: Move[] = []
-  for (const d of defs) moves.push(...makeTriple(d, stickers, idx, stateSize))
+  for (const d of defs) moves.push(...makeTriple(d, stickers, idx, stateSize, N))
   const registry: Record<string, Move> = Object.fromEntries(moves.map((m) => [m.name, m]))
 
   const htmFaces: string[] = []
