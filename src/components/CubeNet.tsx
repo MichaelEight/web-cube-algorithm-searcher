@@ -28,7 +28,6 @@ interface Props {
   stickerGap?: number
   faceGap?: number
   onActivate?: () => void
-  active?: boolean
 }
 
 interface StickerMeta {
@@ -99,7 +98,6 @@ export function CubeNet({
   stickerGap = 2,
   faceGap = 4,
   onActivate,
-  active = false,
 }: Props) {
   const svgRef = useRef<SVGSVGElement>(null)
   const [dragging, setDragging] = useState<'left' | 'right' | null>(null)
@@ -168,7 +166,7 @@ export function CubeNet({
   return (
     <svg
       ref={svgRef}
-      className={`sticker-net${active ? ' active' : ''}`}
+      className="sticker-net"
       width={L.width}
       height={L.height}
       viewBox={`0 0 ${L.width} ${L.height}`}

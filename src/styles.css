@@ -153,13 +153,7 @@ select {
   user-select: none;
   touch-action: none;
   display: block;
-  outline: 2px solid transparent;
-  outline-offset: 2px;
   border-radius: 2px;
-  transition: outline-color 0.1s;
-}
-.sticker-net.active {
-  outline-color: var(--accent);
 }
 
 .sticker {
@@ -172,15 +166,19 @@ select {
 .cube-3d {
   background: var(--bg);
   display: block;
-  align-self: center;
-  margin-top: 28px;
-  outline: 2px solid transparent;
-  outline-offset: 2px;
   border-radius: 4px;
-  transition: outline-color 0.1s;
 }
 .cube-3d.clickable { cursor: pointer; }
-.cube-3d.active { outline-color: var(--accent); }
+
+.cube-frame {
+  padding: 4px;
+  border: 2px solid transparent;
+  border-radius: 6px;
+  transition: border-color 0.12s;
+  display: inline-flex;
+}
+.cube-frame.active { border-color: var(--accent); }
+.cube-frame.three-d { align-self: center; margin-top: 28px; }
 
 /* ---------- palette column (center) ---------- */
 
@@ -190,7 +188,8 @@ select {
   align-items: center;
   gap: 6px;
   padding: 4px 8px;
-  min-width: 64px;
+  width: 130px;
+  flex: 0 0 130px;
 }
 .palette-title {
   font-size: 11px;
@@ -215,6 +214,9 @@ select {
   font-size: 10px;
   text-transform: uppercase;
   letter-spacing: 0.04em;
+  width: 110px;
+  text-align: center;
+  box-sizing: border-box;
 }
 
 .palette {
@@ -313,6 +315,8 @@ select {
   color: var(--fg-dim);
   min-width: 0;
   transition: background 0.08s, color 0.08s, border-color 0.08s;
+  touch-action: none;
+  user-select: none;
 }
 .move-pill:hover { background: var(--hover); color: var(--fg); }
 .move-pill.on {

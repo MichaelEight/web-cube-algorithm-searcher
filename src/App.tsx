@@ -16,6 +16,7 @@ import {
 import { parseSequence } from './cube/notation'
 import { findAlgorithms, findAlgorithmsBidir } from './cube/search'
 import { findAlgorithmsParallel } from './cube/parallel'
+import { simplifyAndDedupe } from './cube/simplify'
 import { CubeNet } from './components/CubeNet'
 import { Cube3D } from './components/Cube3D'
 import { Palette, PALETTE } from './components/Palette'
@@ -170,9 +171,12 @@ export default function App() {
       setProgressPct(0)
       return
     }
-    const sorted = [...sols].sort((a, b) => a.length - b.length)
-    setLastSolutions(sorted)
-    setStatus(`Found ${sorted.length} algorithm(s). Shortest: ${sorted[0].length} moves. ${statsLine}`)
+    const simplified = simplifyAndDedupe(sols)
+    const raw = sols.length
+    const dropped = raw - simplified.length
+    setLastSolutions(simplified)
+    const dedupeNote = dropped > 0 ? `, ${dropped} dedup.` : ''
+    setStatus(`Found ${simplified.length} algorithm(s)${dedupeNote}. Shortest: ${simplified[0].length} moves. ${statsLine}`)
     setProgressPct(100)
   }, [maxDepth])
 
@@ -212,7 +216,7 @@ export default function App() {
 
     const onSol = (path: readonly Move[]) => {
       liveSols.push([...path])
-      setLastSolutions([...liveSols])
+      setLastSolutions(simplifyAndDedupe(liveSols))
     }
 
     try {
@@ -346,7 +350,9 @@ export default function App() {
   return (
     <div className="app">
       <div className="cube-nets">
-        <Cube3D state={startState} scale={cube3dScale} onActivate={() => setActiveCube('start')} active={activeCube === 'start'} />
+        <div className={`cube-frame three-d${activeCube === 'start' ? ' active' : ''}`}>
+          <Cube3D state={startState} scale={cube3dScale} onActivate={() => setActiveCube('start')} />
+        </div>
         <div className="cube-col">
           <div className="cube-col-header">
             <div className="title">Start</div>
@@ -362,7 +368,6 @@ export default function App() {
             selectedColor={selectedColor}
             stickerSize={stickerSize}
             onActivate={() => setActiveCube('start')}
-            active={activeCube === 'start'}
           />
           <div className="row" style={{ gap: 4 }}>
             <button onClick={() => scramble('start')}>Scramble…</button>
@@ -409,7 +414,6 @@ export default function App() {
             selectedColor={selectedColor}
             stickerSize={stickerSize}
             onActivate={() => setActiveCube('target')}
-            active={activeCube === 'target'}
           />
           <div className="row" style={{ gap: 4 }}>
             <button onClick={() => scramble('target')}>Scramble…</button>
@@ -429,7 +433,9 @@ export default function App() {
           </div>
           {targetMovesStatus && <div className="status">{targetMovesStatus}</div>}
         </div>
-        <Cube3D state={targetState} scale={cube3dScale} onActivate={() => setActiveCube('target')} active={activeCube === 'target'} />
+        <div className={`cube-frame three-d${activeCube === 'target' ? ' active' : ''}`}>
+          <Cube3D state={targetState} scale={cube3dScale} onActivate={() => setActiveCube('target')} />
+        </div>
       </div>
 
       <div className="bottom-grid">
