@@ -61,14 +61,22 @@ function clearState(): CubeState {
 
 export default function App() {
   const viewport = useViewport()
+  const isMobile = viewport.w < 780
   const cubeDims = useMemo(() => {
-    // Fit cube net into viewport: pick sticker size so 3 nets stack fits row height ~45% viewport
+    if (isMobile) {
+      // net width = 4 * (3s + 2g) + 3 * fg = 12s + 8g + 3fg = 12s + 16 + 12 = 12s + 28
+      // solve for stickerSize so net fits viewport width with ~20px padding each side
+      const availW = viewport.w - 24
+      const maxByWidth = Math.floor((availW - 28) / 12)
+      const maxByHeight = Math.floor((viewport.h * 0.35 - 8) / 9)
+      const sticker = Math.max(16, Math.min(32, Math.min(maxByWidth, maxByHeight)))
+      return { sticker, scale3d: Math.max(14, Math.min(22, Math.floor(sticker * 0.85))) }
+    }
     const maxNetHeight = Math.max(140, Math.min(260, viewport.h * 0.36))
-    // net height = 9 * sticker + 6 gap + 2 face_gap = 9s + 8 (with gap=2, face_gap=4)
     const sticker = Math.max(12, Math.min(24, Math.floor((maxNetHeight - 8) / 9)))
     const scale3d = Math.max(14, Math.min(26, Math.floor(sticker * 1.15)))
     return { sticker, scale3d }
-  }, [viewport.h])
+  }, [viewport.w, viewport.h, isMobile])
 
   const [startState, setStartState] = useState<CubeState>(() => [...SOLVED])
   const [targetState, setTargetState] = useState<CubeState>(() => [...SOLVED])
@@ -347,6 +355,192 @@ export default function App() {
   const stickerSize = cubeDims.sticker
   const cube3dScale = cubeDims.scale3d
 
+  const currentState = activeCube === 'start' ? startState : targetState
+  const setCurrentState = (s: CubeState) => {
+    if (activeCube === 'start') setStartState(s); else setTargetState(s)
+  }
+  const currentMovesText = activeCube === 'start' ? startMovesText : targetMovesText
+  const setCurrentMovesText = activeCube === 'start' ? setStartMovesText : setTargetMovesText
+  const currentMovesStatus = activeCube === 'start' ? startMovesStatus : targetMovesStatus
+
+  const searchPanelBody = (
+    <>
+      <div className="row" style={{ gap: 12 }}>
+        <label className="field-label">
+          Max length:
+          <input
+            type="number" min={1} max={14} value={maxDepth}
+            onChange={(e) => setMaxDepth(Math.max(1, Math.min(14, parseInt(e.target.value || '0', 10) || 1)))}
+            style={{ width: 60 }}
+          />
+        </label>
+        <label className="field-label">
+          Max solutions:
+          <input
+            type="number" min={1} max={50} value={maxSolutions}
+            onChange={(e) => setMaxSolutions(Math.max(1, Math.min(50, parseInt(e.target.value || '0', 10) || 1)))}
+            style={{ width: 60 }}
+          />
+        </label>
+      </div>
+      <div className="row" style={{ marginTop: 4 }}>
+        <label className="check-label">
+          <input type="checkbox" checked={groupTerms} onChange={(e) => setGroupTerms(e.target.checked)} />
+          Group (A B A' B')
+        </label>
+        <label className="check-label">
+          <input type="checkbox" checked={showAlts} onChange={(e) => setShowAlts(e.target.checked)} />
+          Alts (inv, mir)
+        </label>
+      </div>
+      <div className="row" style={{ marginTop: 4 }}>
+        <span className="check-label">Method:</span>
+        <div className="tooltip-wrap">
+          <select value={method} onChange={(e) => setMethod(e.target.value as Method)}>
+            <option value="iddfs">iddfs</option>
+            <option value="bidir">bidir (concrete target)</option>
+            <option value="parallel">parallel</option>
+          </select>
+          <div className="tooltip">
+            {`iddfs — default. Supports don't-care targets.
+bidir — full target only. Big speedup at depth 9+.
+parallel — multi-worker DFS. Deep HTM exhaustive.`}
+          </div>
+        </div>
+      </div>
+      <div className="row" style={{ marginTop: 6 }}>
+        <button className="accent" onClick={startSearch} disabled={searching}>Search</button>
+        <button onClick={cancelSearch} disabled={!searching}>Cancel</button>
+        <button onClick={() => setShowHistory(true)}>History…</button>
+        <button onClick={() => setShowStats(true)}>Stats…</button>
+      </div>
+      <div className="progress" style={{ marginTop: 6 }}>
+        <div className="progress-bar" style={{ width: `${progressPct}%` }} />
+      </div>
+      <div className="status" style={{ marginTop: 2 }}>{depthText}</div>
+      <div className="status" style={{ whiteSpace: 'pre-wrap', minHeight: 0 }}>{status}</div>
+    </>
+  )
+
+  const resultsBody = (
+    <>
+      <div className="row" style={{ justifyContent: 'space-between' }}>
+        <span className="hint">Tap to select · double-tap to copy</span>
+        <div className="row" style={{ gap: 3 }}>
+          <button onClick={copySelected} disabled={selectedResult === null}>Copy</button>
+          <button onClick={saveSelectedAlg} disabled={selectedResult === null}>Save…</button>
+        </div>
+      </div>
+      <ResultsList
+        lines={lines}
+        selectedIdx={selectedResult}
+        onSelect={setSelectedResult}
+        onCopy={copyToClipboard}
+      />
+    </>
+  )
+
+  const modals = (
+    <>
+      <HistoryDialog
+        open={showHistory}
+        onClose={() => setShowHistory(false)}
+        grouped={groupTerms}
+        onLoadStart={(s) => { setStartState(s); setShowHistory(false) }}
+        onLoadTarget={(s) => { setTargetState(s); setShowHistory(false) }}
+        onLoadBoth={(s, t) => { setStartState(s); setTargetState(t); setShowHistory(false) }}
+      />
+      <StatsDialog open={showStats} onClose={() => setShowStats(false)} />
+      <LoadStateDialog
+        open={loadTarget !== null}
+        onClose={() => setLoadTarget(null)}
+        onLoad={(s) => {
+          if (loadTarget === 'start') setStartState(s)
+          else if (loadTarget === 'target') setTargetState(s)
+        }}
+      />
+    </>
+  )
+
+  if (isMobile) {
+    const applyCurrent = () => applyMoves(activeCube)
+    return (
+      <div className="app app-mobile">
+        <div className="mobile-tabs">
+          <button
+            className={`tab${activeCube === 'start' ? ' active' : ''}`}
+            onClick={() => setActiveCube('start')}
+          >Start</button>
+          <button
+            className={`tab${activeCube === 'target' ? ' active' : ''}`}
+            onClick={() => setActiveCube('target')}
+          >Target <span className="hint">?</span></button>
+        </div>
+
+        <div className="mobile-3d">
+          <Cube3D state={currentState} scale={cube3dScale} />
+        </div>
+
+        <div className="mobile-net">
+          <CubeNet
+            state={currentState}
+            onChange={setCurrentState}
+            selectedColor={selectedColor}
+            stickerSize={stickerSize}
+            onActivate={() => { /* already active via tab */ }}
+          />
+        </div>
+
+        <div className="mobile-actions">
+          <button onClick={() => setCurrentState([...SOLVED])}>Solved</button>
+          <button onClick={() => setCurrentState(clearState())}>Clear</button>
+          {activeCube === 'start'
+            ? <button onClick={swap} title="Swap">⇄ Swap</button>
+            : <button onClick={() => setTargetState([...startState])}>← Start</button>}
+          <button onClick={() => scramble(activeCube)}>Scramble…</button>
+          <button onClick={() => saveStatePrompt(activeCube)}>Save…</button>
+          <button onClick={() => setLoadTarget(activeCube)}>Load…</button>
+        </div>
+
+        <div className="mobile-moves-input">
+          <input
+            type="text"
+            placeholder="R U R' U' …"
+            value={currentMovesText}
+            onChange={(e) => setCurrentMovesText(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter') applyCurrent() }}
+          />
+          <button onClick={applyCurrent}>Apply</button>
+        </div>
+        {currentMovesStatus && <div className="status">{currentMovesStatus}</div>}
+
+        <div className="mobile-palette">
+          <span className="palette-title">Paint</span>
+          <Palette active={selectedColor} onSelect={setSelectedColor} direction="horizontal" />
+        </div>
+
+        <details className="mobile-section">
+          <summary>Allowed moves</summary>
+          <div className="mobile-section-body">
+            <MoveSelector toggles={toggles} setToggles={setToggles} />
+          </div>
+        </details>
+
+        <details className="mobile-section" open>
+          <summary>Search</summary>
+          <div className="mobile-section-body panel">{searchPanelBody}</div>
+        </details>
+
+        <details className="mobile-section" open>
+          <summary>Results {lastSolutions.length > 0 ? `(${lastSolutions.length})` : ''}</summary>
+          <div className="mobile-section-body panel results-panel">{resultsBody}</div>
+        </details>
+
+        {modals}
+      </div>
+    )
+  }
+
   return (
     <div className="app">
       <div className="cube-nets">
@@ -443,70 +637,7 @@ export default function App() {
 
         <div className="panel">
           <div className="panel-title">Search</div>
-          <div className="row" style={{ gap: 12 }}>
-            <label className="field-label">
-              Max length:
-              <input
-                type="number"
-                min={1}
-                max={14}
-                value={maxDepth}
-                onChange={(e) => setMaxDepth(Math.max(1, Math.min(14, parseInt(e.target.value || '0', 10) || 1)))}
-                style={{ width: 60 }}
-              />
-            </label>
-            <label className="field-label">
-              Max solutions:
-              <input
-                type="number"
-                min={1}
-                max={50}
-                value={maxSolutions}
-                onChange={(e) => setMaxSolutions(Math.max(1, Math.min(50, parseInt(e.target.value || '0', 10) || 1)))}
-                style={{ width: 60 }}
-              />
-            </label>
-          </div>
-
-          <div className="row" style={{ marginTop: 4 }}>
-            <label className="check-label">
-              <input type="checkbox" checked={groupTerms} onChange={(e) => setGroupTerms(e.target.checked)} />
-              Group (A B A' B')
-            </label>
-            <label className="check-label">
-              <input type="checkbox" checked={showAlts} onChange={(e) => setShowAlts(e.target.checked)} />
-              Alts (inv, mir)
-            </label>
-          </div>
-
-          <div className="row" style={{ marginTop: 4 }}>
-            <span className="check-label">Method:</span>
-            <div className="tooltip-wrap">
-              <select value={method} onChange={(e) => setMethod(e.target.value as Method)}>
-                <option value="iddfs">iddfs</option>
-                <option value="bidir">bidir (concrete target)</option>
-                <option value="parallel">parallel</option>
-              </select>
-              <div className="tooltip">
-                {`iddfs — default. Supports don't-care targets.
-bidir — full target only. Big speedup at depth 9+.
-parallel — multi-worker DFS. Deep HTM exhaustive.`}
-              </div>
-            </div>
-          </div>
-
-          <div className="row" style={{ marginTop: 6 }}>
-            <button className="accent" onClick={startSearch} disabled={searching}>Search</button>
-            <button onClick={cancelSearch} disabled={!searching}>Cancel</button>
-            <button onClick={() => setShowHistory(true)}>History…</button>
-            <button onClick={() => setShowStats(true)}>Stats…</button>
-          </div>
-
-          <div className="progress" style={{ marginTop: 6 }}>
-            <div className="progress-bar" style={{ width: `${progressPct}%` }} />
-          </div>
-          <div className="status" style={{ marginTop: 2 }}>{depthText}</div>
-          <div className="status" style={{ whiteSpace: 'pre-wrap', flex: 1, overflow: 'auto', minHeight: 0 }}>{status}</div>
+          {searchPanelBody}
         </div>
 
         <div className="panel results-panel">
@@ -527,23 +658,7 @@ parallel — multi-worker DFS. Deep HTM exhaustive.`}
         </div>
       </div>
 
-      <HistoryDialog
-        open={showHistory}
-        onClose={() => setShowHistory(false)}
-        grouped={groupTerms}
-        onLoadStart={(s) => { setStartState(s); setShowHistory(false) }}
-        onLoadTarget={(s) => { setTargetState(s); setShowHistory(false) }}
-        onLoadBoth={(s, t) => { setStartState(s); setTargetState(t); setShowHistory(false) }}
-      />
-      <StatsDialog open={showStats} onClose={() => setShowStats(false)} />
-      <LoadStateDialog
-        open={loadTarget !== null}
-        onClose={() => setLoadTarget(null)}
-        onLoad={(s) => {
-          if (loadTarget === 'start') setStartState(s)
-          else if (loadTarget === 'target') setTargetState(s)
-        }}
-      />
+      {modals}
     </div>
   )
 }
