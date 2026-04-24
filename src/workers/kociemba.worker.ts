@@ -1,7 +1,9 @@
 /// <reference lib="webworker" />
 // Kociemba two-phase solver (3x3 only) running in a worker so the ~4-5s initSolver table build
-// does not block the UI. The worker lazy-inits on its first solve request.
-import Cube from 'cubejs'
+// does not block the UI. The worker lazy-inits on its first solve request. cubejs is vendored
+// (see src/vendor/cubejs/) with a one-line patch to its `this.Cube` fallback so it works
+// inside an ES-module worker where top-level `this` is undefined.
+import Cube from '../vendor/cubejs/index.js'
 
 export interface KociembaJob {
   type: 'solve'

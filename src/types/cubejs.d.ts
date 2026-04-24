@@ -1,4 +1,4 @@
-declare module 'cubejs' {
+declare module '*vendor/cubejs/index.js' {
   interface CubeInstance {
     solve(maxDepth?: number): string
     asString(): string
