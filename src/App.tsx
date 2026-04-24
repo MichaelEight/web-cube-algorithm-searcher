@@ -11,6 +11,7 @@ import { parseSequence } from './cube/notation'
 import { findAlgorithmsParallel } from './cube/parallel'
 import { findAlgorithmsInWorker } from './cube/singleWorker'
 import { findAlgorithmKociemba } from './cube/kociemba'
+import { findAlgorithmCstimer444 } from './cube/cstimer444'
 import { simplifyAndDedupe } from './cube/simplify'
 import { CubeNet } from './components/CubeNet'
 import { Cube3D } from './components/Cube3D'
@@ -26,7 +27,7 @@ import * as statsStore from './storage/stats'
 import * as userAlgs from './storage/userAlgs'
 import * as sessionStore from './storage/session'
 
-type Method = 'iddfs' | 'bidir' | 'parallel' | 'kociemba'
+type Method = 'iddfs' | 'bidir' | 'parallel' | 'kociemba' | 'reduction444'
 type CubeSize = 2 | 3 | 4
 
 const CUBE_SIZES: readonly CubeSize[] = [2, 3, 4]
@@ -332,6 +333,24 @@ export default function App() {
         switchTo: 'kociemba',
       }
     }
+    if (method === 'reduction444' && cube.N !== 4) {
+      return {
+        text: `4×4 reduction is 4×4-only — on ${cube.N}×${cube.N}, switch method.`,
+        switchTo: cube.N === 3 ? 'kociemba' : 'parallel',
+      }
+    }
+    if (method === 'reduction444' && (hasAnyTarget || hasAnyStart)) {
+      return {
+        text: "4×4 reduction needs fully-defined start and target. Switch to iddfs to handle wildcards.",
+        switchTo: 'iddfs',
+      }
+    }
+    if (cube.N === 4 && !hasAnyTarget && !hasAnyStart && method !== 'reduction444' && depthVal >= 8) {
+      return {
+        text: `Fully-defined 4×4: IDDFS/parallel won't reach a full solve in practice — reduction (Chen TPR) finishes in seconds.`,
+        switchTo: 'reduction444',
+      }
+    }
     if (method === 'bidir' && hasAnyTarget) {
       return {
         text: "Target has don't-care cells — bidir needs a fully defined target. Switch to iddfs (or parallel) to handle wildcards.",
@@ -439,6 +458,15 @@ export default function App() {
         chosen = 'iddfs'
       }
     }
+    if (chosen === 'reduction444') {
+      if (cube.N !== 4) {
+        setStatus('4×4 reduction solver is 4×4 only — falling back to parallel.')
+        chosen = 'parallel'
+      } else if (startState.some((v) => v === ANY) || targetState.some((v) => v === ANY)) {
+        setStatus('4×4 reduction needs fully defined start and target — falling back to IDDFS.')
+        chosen = 'iddfs'
+      }
+    }
 
     setLastSolutions([])
     setSelectedResult(null)
@@ -491,6 +519,16 @@ export default function App() {
           onHeap,
           onProgress: (phase) => {
             setStatus(phase === 'init' ? 'Kociemba: building lookup tables (~4–5s)…' : 'Kociemba: solving…')
+          },
+        })
+        if (r.solutions.length) onSol(r.solutions[0])
+        result = { solutions: r.solutions, nodes: r.nodes, peakHeap: r.peakHeap }
+      } else if (chosen === 'reduction444') {
+        const r = await findAlgorithmCstimer444(cube, startState, targetState, {
+          cancel,
+          onHeap,
+          onProgress: (phase) => {
+            setStatus(phase === 'init' ? '4×4 reduction: building lookup tables (first solve is slow)…' : '4×4 reduction: solving…')
           },
         })
         if (r.solutions.length) onSol(r.solutions[0])
@@ -711,12 +749,16 @@ export default function App() {
             <option value="kociemba" disabled={cube.N !== 3}>
               kociemba (3×3, two-phase)
             </option>
+            <option value="reduction444" disabled={cube.N !== 4}>
+              reduction (4×4, Chen TPR)
+            </option>
           </select>
           <div className="tooltip">
             {`iddfs — default. Supports don't-care targets.
 bidir — full target only. Big speedup at depth 9+.
 parallel — multi-worker DFS. Deep HTM exhaustive.
-kociemba — 3×3 only, near-optimal ≤22 moves, ~4–5s warmup then ms-level solves.`}
+kociemba — 3×3 only, near-optimal ≤22 moves, ~4–5s warmup then ms-level solves.
+reduction — 4×4 only, centers→edges→3×3 pipeline (cstimer). First solve slow while tables build.`}
           </div>
         </div>
       </div>
