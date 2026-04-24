@@ -1071,10 +1071,16 @@
   }).call(this);
 
   //# Globals
+  // Patched for ESM workers: the original `this.Cube = Cube` branch throws in strict mode
+  // because top-level `this` is undefined. We install on globalThis instead, which is also
+  // what our patched solve.js reads as its fallback when `module` isn't defined.
   if (typeof module !== "undefined" && module !== null) {
     module.exports = Cube;
-  } else {
-    this.Cube = Cube;
+  }
+  if (typeof globalThis !== 'undefined') {
+    globalThis.Cube = Cube;
+  } else if (typeof self !== 'undefined') {
+    self.Cube = Cube;
   }
 
-}).call(this);
+}).call(typeof globalThis !== 'undefined' ? globalThis : (typeof self !== 'undefined' ? self : {}));

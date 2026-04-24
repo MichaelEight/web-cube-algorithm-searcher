@@ -106,7 +106,15 @@ function runWorkerSolve(
     worker.addEventListener('error', (ev) => {
       if (finished) return
       cleanup()
-      reject(new KociembaError(ev.message || 'kociemba worker error'))
+      const detail = [ev.message, ev.filename, ev.lineno, ev.colno].filter(Boolean).join(':')
+      console.error('[kociemba worker] error', ev, detail, ev.error)
+      reject(new KociembaError(detail || 'kociemba worker error'))
+    })
+    worker.addEventListener('messageerror', (ev) => {
+      if (finished) return
+      cleanup()
+      console.error('[kociemba worker] messageerror', ev)
+      reject(new KociembaError('kociemba worker messageerror'))
     })
 
     opts.onProgress?.('solving')
