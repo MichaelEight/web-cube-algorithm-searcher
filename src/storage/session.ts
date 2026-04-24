@@ -14,7 +14,7 @@ export interface SessionSnapshot {
   maxSolutions: number
   groupTerms: boolean
   showAlts: boolean
-  method: 'iddfs' | 'bidir' | 'parallel'
+  method: 'iddfs' | 'bidir' | 'parallel' | 'kociemba'
   selectedColor: number
   activeCube: 'start' | 'target'
   startMovesText: string

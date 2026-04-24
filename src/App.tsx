@@ -10,6 +10,7 @@ import {
 import { parseSequence } from './cube/notation'
 import { findAlgorithmsParallel } from './cube/parallel'
 import { findAlgorithmsInWorker } from './cube/singleWorker'
+import { findAlgorithmKociemba } from './cube/kociemba'
 import { simplifyAndDedupe } from './cube/simplify'
 import { CubeNet } from './components/CubeNet'
 import { Cube3D } from './components/Cube3D'
@@ -25,7 +26,7 @@ import * as statsStore from './storage/stats'
 import * as userAlgs from './storage/userAlgs'
 import * as sessionStore from './storage/session'
 
-type Method = 'iddfs' | 'bidir' | 'parallel'
+type Method = 'iddfs' | 'bidir' | 'parallel' | 'kociemba'
 type CubeSize = 2 | 3 | 4
 
 const CUBE_SIZES: readonly CubeSize[] = [2, 3, 4]
@@ -307,12 +308,31 @@ export default function App() {
   const lines: ResultLine[] = buildResultLines(cube, lastSolutions, groupTerms, showAlts)
 
   const methodSuggestion = useMemo<{ text: string; switchTo: Method } | null>(() => {
-    const hasAny = targetState.some((v) => v === ANY)
+    const hasAnyTarget = targetState.some((v) => v === ANY)
+    const hasAnyStart = startState.some((v) => v === ANY)
     const depthVal = maxDepth ?? 0
     const deep = depthVal >= 10
     const veryDeep = depthVal >= 12
     const bigCube = cube.N >= 4
-    if (method === 'bidir' && hasAny) {
+    if (method === 'kociemba' && cube.N !== 3) {
+      return {
+        text: `Kociemba is 3×3-only — on ${cube.N}×${cube.N}, fall back to parallel.`,
+        switchTo: 'parallel',
+      }
+    }
+    if (method === 'kociemba' && (hasAnyTarget || hasAnyStart)) {
+      return {
+        text: "Kociemba needs fully-defined start and target. Switch to iddfs to handle wildcards.",
+        switchTo: 'iddfs',
+      }
+    }
+    if (cube.N === 3 && !hasAnyTarget && !hasAnyStart && method !== 'kociemba' && depthVal >= 12) {
+      return {
+        text: `Fully-defined 3×3 at depth ${depthVal} — kociemba solves in ≤22 moves in milliseconds after a one-time ~4s warmup.`,
+        switchTo: 'kociemba',
+      }
+    }
+    if (method === 'bidir' && hasAnyTarget) {
       return {
         text: "Target has don't-care cells — bidir needs a fully defined target. Switch to iddfs (or parallel) to handle wildcards.",
         switchTo: 'parallel',
@@ -324,7 +344,7 @@ export default function App() {
         switchTo: 'parallel',
       }
     }
-    if (!hasAny && deep && method !== 'bidir') {
+    if (!hasAnyTarget && deep && method !== 'bidir' && method !== 'kociemba') {
       return {
         text: `Concrete target and depth ${depthVal} — bidir meets in the middle and is usually much faster past depth 10.`,
         switchTo: 'bidir',
@@ -337,7 +357,7 @@ export default function App() {
       }
     }
     return null
-  }, [method, targetState, maxDepth, cube])
+  }, [method, startState, targetState, maxDepth, cube])
 
   const collectAllowed = useCallback((): Move[] => cube.ALL_MOVES.filter((m) => toggles[m.name]), [cube, toggles])
 
@@ -410,6 +430,15 @@ export default function App() {
       setStatus('Bidir needs concrete target — falling back to IDDFS.')
       chosen = 'iddfs'
     }
+    if (chosen === 'kociemba') {
+      if (cube.N !== 3) {
+        setStatus('Kociemba solves 3×3 only — falling back to parallel.')
+        chosen = 'parallel'
+      } else if (startState.some((v) => v === ANY) || targetState.some((v) => v === ANY)) {
+        setStatus('Kociemba needs fully defined start and target — falling back to IDDFS.')
+        chosen = 'iddfs'
+      }
+    }
 
     setLastSolutions([])
     setSelectedResult(null)
@@ -455,6 +484,17 @@ export default function App() {
         result = await findAlgorithmsParallel(cube, startState, targetState, allowed, {
           maxDepth, maxSolutions, cancel, progressCb: onProgress, onSolution: onSol, onHeap,
         })
+      } else if (chosen === 'kociemba') {
+        const r = await findAlgorithmKociemba(cube, startState, targetState, {
+          maxDepth,
+          cancel,
+          onHeap,
+          onProgress: (phase) => {
+            setStatus(phase === 'init' ? 'Kociemba: building lookup tables (~4–5s)…' : 'Kociemba: solving…')
+          },
+        })
+        if (r.solutions.length) onSol(r.solutions[0])
+        result = { solutions: r.solutions, nodes: r.nodes, peakHeap: r.peakHeap }
       } else {
         // iddfs and bidir both run off-thread via a single worker so the UI stays responsive.
         const r = await findAlgorithmsInWorker(chosen, cube, startState, targetState, allowed, {
@@ -668,11 +708,15 @@ export default function App() {
             <option value="iddfs">iddfs</option>
             <option value="bidir">bidir (concrete target)</option>
             <option value="parallel">parallel</option>
+            <option value="kociemba" disabled={cube.N !== 3}>
+              kociemba (3×3, two-phase)
+            </option>
           </select>
           <div className="tooltip">
             {`iddfs — default. Supports don't-care targets.
 bidir — full target only. Big speedup at depth 9+.
-parallel — multi-worker DFS. Deep HTM exhaustive.`}
+parallel — multi-worker DFS. Deep HTM exhaustive.
+kociemba — 3×3 only, near-optimal ≤22 moves, ~4–5s warmup then ms-level solves.`}
           </div>
         </div>
       </div>
